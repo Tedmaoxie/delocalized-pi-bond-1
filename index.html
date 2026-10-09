@@ -2268,6 +2268,7 @@ const ENGINE = {
     panXPx: 0,              // 桌面端右侧判据工具展开时，模型向左让出空间
     panXSmooth: 0,
     visibleWidthFraction: 1,
+    visibleHeightFraction: 1,
     quality: 'high',
 
     /* ---- 初始化渲染器（容器初始可能宽高为 0，先兜 1×1 再校正） ---- */
@@ -2661,12 +2662,9 @@ const ENGINE = {
         this.viewKey = key;
     },
 
-    /* ---- 按当前视角精确算出"物体在屏幕上占多大"，再求刚好装得下的相机距离 ----
-       为什么不直接用包围球：苯、萘这类分子是"扁平"的，用包围球算会算得太远，
-       投影到屏幕上分子只有巴掌大。这里改成把关键采样点投到相机的"屏幕右轴/上轴"上，
-       取实际最大跨度，再换算成距离。
-       采样点 = 每个参与原子 + 它在平面上下 ±trim/2 的位置（电子云主要分布区），
-       并统一放大 1.35 倍作为"电子云比原子核铺得更开"的余量。 */
+    /* ---- 按起点散开的骨架取景，给整段动画和电子云预留空间 ----
+       起点原子间距是基准的 1.55 倍；若只按终点计算，刷新时会显得过大甚至被裁。
+       用实际视角的水平/竖直投影估算大小，再留出透视与浮层的边距。 */
     fitDistance(spec, key) {
         const p = spec.viewPresets[key] || spec.viewPresets.main;
         const a = this.dirToAngles(p.dir);
@@ -2682,8 +2680,9 @@ const ENGINE = {
         const v = new THREE.Vector3();
         spec.pi.forEach(q => {
             [0, hz, -hz].forEach(z => {
-                // 以物种自己的几何中心为基准来量跨度，这样画面里的分子才是居中的
-                v.set(q.pos[0] - spec.center[0], q.pos[1] - spec.center[1], z);
+                // 骨架起点按 START_DIST 拉开；p 轨道的上下厚度不随骨架间距缩放。
+                v.set((q.pos[0] - spec.center[0]) * START_DIST,
+                    (q.pos[1] - spec.center[1]) * START_DIST, z);
                 hExt = Math.max(hExt, Math.abs(v.dot(right)));
                 vExt = Math.max(vExt, Math.abs(v.dot(upv)));
             });
@@ -2694,10 +2693,12 @@ const ENGINE = {
         // 若给它设一个偏大的下限，会误以为水平方向很宽，算出的距离偏近 → 分子左右被裁掉。
         const aspect = Math.max((this.camera.aspect || 1) * this.visibleWidthFraction, 0.05);
         const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
-        const d = Math.max(vExt / Math.tan(vFov / 2), hExt / Math.tan(hFov / 2));
-        // 各模块机位自己的远近微调（数据里 dist 就是"远近倍率"）
-        const zoom = 0.85 + ((p.dist || 1.45) - 1.3) * 0.30;
-        return d * zoom;
+        const availableHeight = Math.max(this.visibleHeightFraction || 1, 0.45);
+        const d = Math.max(vExt / (Math.tan(vFov / 2) * availableHeight),
+            hExt / Math.tan(hFov / 2));
+        // 机位预设仍可微调距离，但不得缩小安全取景；另留约 12% 的舒适边距。
+        const zoom = Math.max(1, 0.85 + ((p.dist || 1.45) - 1.3) * 0.30);
+        return d * zoom * 1.12;
     },
 
     /* ---- 每帧更新：把界面状态翻译成着色器 uniform 与场景开关 ---- */
@@ -2949,6 +2950,7 @@ const ENGINE = {
         this.panPx = clearBottom > clearTop + 40
             ? Math.max(-sr.height * 0.3, Math.min(sr.height * 0.3, sr.height / 2 - (clearTop + clearBottom) / 2))
             : 0;
+        this.visibleHeightFraction = Math.max(0.45, Math.min(1, (clearBottom - clearTop) / sr.height));
         // 桌面端右侧工具打开时，计算剩余画布的中心和可用宽度。
         const tool = stage.querySelector('.tool:not(.collapsed)');
         const toolRect = tool && tool.getBoundingClientRect();
