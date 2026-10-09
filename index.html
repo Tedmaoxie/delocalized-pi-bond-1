@@ -1,0 +1,3429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>大 π 键成键可视化by实验中学</title>
+
+<!-- 内联的 π 图标（data URI，不引用任何外部图片）。
+     为什么必须显式写这一行：本地文件（file://）打开时，浏览器若找不到站点图标，
+     会自动去请求一个默认图标，而那个请求会落到 index.html 自身，
+     控制台就会报 "Unsafe attempt to load URL file:///... 'file:' URLs are treated as unique security origins"。
+     写死一个 data URI 图标之后，浏览器不再发起任何图标请求，这条报错即消失。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a1f3d'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='%235ad2ff' font-family='serif'%3E%CF%80%3C/text%3E%3C/svg%3E">
+
+<!-- ===== 依赖全部走 CDN，顺序不能乱：Three.js 必须在业务代码之前 ===== -->
+<script src="https://cdn.staticfile.net/vue/3.3.4/vue.global.prod.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.staticfile.net/three.js/r128/three.min.js"></script>
+
+<style>
+/* =====================================================================
+   一、设计令牌（CSS 变量）
+   深浅双主题只换变量值、不改样式规则；
+   相位色（红/蓝）与发光强度也走变量，方便教师统一改配色。
+   ===================================================================== */
+:root{
+    /* 背景：深空蓝 → 深海蓝 */
+    --bg-0:#050a15;
+    --bg-1:#0a1f3d;
+    --bg-2:#071228;
+
+    /* 文字层次 */
+    --ink:#e9f1ff;
+    --ink-dim:#a9bcdd;
+    --ink-faint:#7186ac;
+
+    /* 玻璃卡片 */
+    --glass:rgba(17,31,56,.62);
+    --glass-2:rgba(12,23,44,.78);
+    --glass-brd:rgba(255,255,255,.11);
+    --glass-hi:rgba(255,255,255,.30);
+    --shadow:0 18px 50px -18px rgba(0,0,0,.85);
+    --shadow-soft:0 8px 24px -18px rgba(0,0,0,.7);
+
+    /* 主色：蓝紫青 */
+    --accent:#5ad2ff;
+    --accent-2:#8b9cff;
+    --accent-3:#39e3c5;
+    --accent-soft:rgba(90,210,255,.14);
+
+    /* 相位色（拓展内容：波函数正负号） */
+    --pos:#ff5f72;
+    --neg:#4d8cff;
+
+    --warn:#ffb648;
+    --ok:#3ddc9a;
+    --bad:#ff6b81;
+
+    /* 画布发光强度：浅色主题下要压低，否则荧光色糊成一块 */
+    --glow:1;
+
+    /* 字体：标题用衬线（学术感、非通用无衬线），正文用中文黑体，数字用等宽 */
+    --font-display:"Songti SC","STSong","Source Han Serif SC","Noto Serif SC",Georgia,serif;
+    --font-body:"PingFang SC","HarmonyOS Sans SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    --font-mono:"Cascadia Mono","JetBrains Mono",ui-monospace,Consolas,monospace;
+
+    --r-lg:18px;
+    --r-md:12px;
+    --r-sm:8px;
+}
+
+/* 浅色主题：颜色整体压深 + 透明度整体降低（对应着色器里的 themeInk / lightThemeAlpha） */
+body.light-theme{
+    --bg-0:#eef3fb;
+    --bg-1:#d9e5f7;
+    --bg-2:#e6edf9;
+    --ink:#0f2038;
+    --ink-dim:#3b5075;
+    --ink-faint:#6b7f9e;
+    --glass:rgba(255,255,255,.74);
+    --glass-2:rgba(255,255,255,.86);
+    --glass-brd:rgba(16,40,80,.14);
+    --glass-hi:rgba(255,255,255,.9);
+    --shadow:0 16px 40px -20px rgba(20,45,90,.45);
+    --shadow-soft:0 6px 20px -16px rgba(20,45,90,.28);
+    --accent:#0a6fbb;
+    --accent-2:#4a51c9;
+    --accent-3:#0b8f7d;
+    --accent-soft:rgba(10,111,187,.10);
+    --pos:#c9163a;
+    --neg:#1650c4;
+    --warn:#b8700a;
+    --ok:#0d8b5f;
+    --bad:#c9163a;
+    --glow:.35;
+}
+
+*{box-sizing:border-box}
+[v-cloak]{display:none}
+button{font-family:var(--font-body);touch-action:manipulation}
+button:focus-visible,input[type=range]:focus-visible{
+    outline:2px solid var(--accent);outline-offset:2px;
+    box-shadow:0 0 0 4px var(--accent-soft);
+}
+button:active:not(:disabled){filter:brightness(1.12)}
+@media (hover:none){
+    .chip:hover,.pbtn:hover{transform:none}
+}
+html,body{height:100%}
+#app{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+body{
+    margin:0;
+    /* 用视口单位写死高度，而不是只靠 height:100% 的继承链：
+       万一在嵌入式预览里百分比高度链失效，.shell 会算成"内容高度"，
+       3D 画布就会被撑得比屏幕高，画面中心直接被推到可视区之外（看起来"沉到下面看不见"）。 */
+    height:100vh;
+    font-family:var(--font-body);
+    color:var(--ink);
+    background:var(--bg-0);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    transition:background .5s ease,color .5s ease;
+}
+/* 手机浏览器地址栏收放时 100vh 会比可视区高，用 dvh 更准（老浏览器自动忽略这条） */
+@supports (height:100dvh){ body{height:100dvh} }
+
+/* =====================================================================
+   二、背景层：极光渐变 + 漂移色块 + 细微粒子场（营造微观空间感）
+   纯 CSS 实现，不额外开一个 WebGL 上下文，省性能
+   ===================================================================== */
+.aurora{position:fixed;inset:0;z-index:0;overflow:hidden;
+    background:linear-gradient(160deg,var(--bg-0) 0%,var(--bg-1) 55%,var(--bg-2) 100%);
+    transition:background .5s ease}
+.aurora .blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:.5;will-change:transform}
+.aurora .b1{width:52vw;height:52vw;left:-12vw;top:-14vw;background:radial-gradient(circle,rgba(60,140,255,.55),transparent 68%);animation:drift1 34s ease-in-out infinite}
+.aurora .b2{width:44vw;height:44vw;right:-10vw;top:8vh;background:radial-gradient(circle,rgba(80,60,220,.45),transparent 68%);animation:drift2 42s ease-in-out infinite}
+.aurora .b3{width:48vw;height:48vw;left:22vw;bottom:-22vw;background:radial-gradient(circle,rgba(30,200,190,.34),transparent 68%);animation:drift3 50s ease-in-out infinite}
+body.light-theme .aurora .blob{opacity:.42}
+/* 细微点阵：做出“稀疏粒子场”的质感 */
+.aurora .grain{position:absolute;inset:0;opacity:.5;
+    background-image:radial-gradient(circle,rgba(255,255,255,.5) .6px,transparent .7px);
+    background-size:26px 26px}
+body.light-theme .aurora .grain{background-image:radial-gradient(circle,rgba(20,50,100,.28) .6px,transparent .7px)}
+@keyframes drift1{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(6vw,4vh,0) scale(1.12)}}
+@keyframes drift2{0%,100%{transform:translate3d(0,0,0) scale(1.05)}50%{transform:translate3d(-5vw,7vh,0) scale(.95)}}
+@keyframes drift3{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(4vw,-6vh,0) scale(1.14)}}
+
+/* =====================================================================
+   三、顶栏
+   ===================================================================== */
+.topbar{
+    position:relative;z-index:20;height:60px;flex:0 0 60px;
+    display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:0 16px;
+    background:linear-gradient(180deg,var(--glass-2),transparent);
+    border-bottom:1px solid var(--glass-brd);
+    backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.brand-mark{
+    width:38px;height:38px;flex:0 0 38px;border-radius:11px;
+    display:grid;place-items:center;
+    font-family:var(--font-display);font-size:22px;font-weight:700;color:#031225;
+    background:linear-gradient(140deg,var(--accent),var(--accent-2));
+    box-shadow:0 0 22px -4px var(--accent);
+}
+.brand h1{margin:0;font-family:var(--font-display);font-size:17px;font-weight:700;letter-spacing:.4px;white-space:nowrap}
+.brand h1 .series-name{display:block;font-family:var(--font-body);font-size:11px;font-weight:500;line-height:1.25;color:var(--ink-dim);letter-spacing:0;overflow:hidden;text-overflow:ellipsis}
+.top-actions{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;min-width:0;overflow-x:auto;scrollbar-width:thin}
+.top-actions .chip{flex:0 0 auto}
+
+/* 通用小胶囊按钮 */
+.chip{
+    min-height:34px;padding:0 12px;cursor:pointer;
+    font-family:var(--font-body);font-size:12.5px;color:var(--ink-dim);
+    background:var(--glass);border:1px solid var(--glass-brd);border-radius:999px;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    transition:all .18s ease;white-space:nowrap;
+}
+.chip:hover{color:var(--ink);border-color:var(--accent);transform:translateY(-1px)}
+.chip.on{color:#03121f;background:linear-gradient(140deg,var(--accent),var(--accent-3));border-color:transparent;font-weight:600}
+body.light-theme .chip.on{color:#fff}
+
+/* =====================================================================
+   四、主体分栏：左侧导航+信息卡 / 右侧 3D 主区
+   ===================================================================== */
+.shell{position:relative;z-index:10;display:flex;flex:1 1 auto;height:auto;min-height:0;overflow:hidden}
+
+.sidebar{
+    width:288px;flex:0 0 288px;min-height:0;
+    display:flex;flex-direction:column;gap:10px;
+    padding:12px;
+    overflow-y:auto;overflow-x:hidden;
+    border-right:1px solid var(--glass-brd);
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.12));
+    scrollbar-width:thin;
+}
+.sidebar::-webkit-scrollbar{width:8px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--glass-brd);border-radius:8px}
+/* 侧栏里的信息卡容器：宽屏时跟着侧栏一起滚；窄屏时由它自己内部滚，整页就不再出现滚动条 */
+.side-cards{display:flex;flex-direction:column}
+.scroll-hint{display:none}
+/* 模块导航 */
+.nav{display:flex;flex-direction:column;gap:5px}
+.nav-item{
+    position:relative;display:flex;align-items:center;gap:10px;
+    min-height:42px;padding:8px 10px;cursor:pointer;text-align:left;
+    color:var(--ink-dim);font-size:13px;
+    background:transparent;border:1px solid transparent;border-radius:var(--r-md);
+    transition:all .18s ease;
+}
+.nav-item:hover{background:var(--accent-soft);color:var(--ink)}
+.nav-item.active{
+    color:var(--ink);background:var(--glass);
+    border-color:var(--glass-brd);box-shadow:inset 0 0 0 1px var(--accent-soft);
+}
+.nav-item.active::before{
+    content:"";position:absolute;left:-1px;top:9px;bottom:9px;width:3px;border-radius:3px;
+    background:linear-gradient(180deg,var(--accent),var(--accent-3));
+    box-shadow:0 0 12px var(--accent);
+}
+.nav-item .idx{
+    flex:0 0 24px;height:24px;border-radius:7px;display:grid;place-items:center;
+    font-family:var(--font-mono);font-size:11px;
+    background:var(--accent-soft);color:var(--accent);border:1px solid var(--glass-brd);
+}
+.nav-item.active .idx{background:linear-gradient(140deg,var(--accent),var(--accent-2));color:#04121f;border-color:transparent}
+.nav-item .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-item .star{color:var(--warn);font-size:11px}
+.nav-sec{
+    margin:12px 2px 2px;font-size:10.5px;letter-spacing:1.6px;
+    color:var(--ink-faint);text-transform:uppercase;
+}
+
+/* 信息卡 */
+.card{
+    background:var(--glass);border:1px solid var(--glass-brd);border-radius:var(--r-lg);
+    padding:13px 14px;backdrop-filter:blur(9px);-webkit-backdrop-filter:blur(9px);
+    box-shadow:var(--shadow-soft);position:relative;overflow:hidden;
+}
+/* 误区卡需要独立滚动：此规则必须放在 .card 后面，否则 overflow:hidden 会盖掉滚动设置。 */
+.card.panel-scroll{flex:1 1 0;min-height:0;overflow-x:hidden;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--ink-faint) transparent}
+.card.panel-scroll::-webkit-scrollbar{width:8px}
+.card.panel-scroll::-webkit-scrollbar-thumb{background:var(--ink-faint)}
+/* 顶部 1px 高光：模拟上方光源 */
+.card::after{
+    content:"";position:absolute;left:12px;right:12px;top:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--glass-hi),transparent);
+}
+.card + .card{margin-top:10px}
+.card h3{
+    margin:0 0 8px;font-size:11.5px;letter-spacing:1px;color:var(--ink-faint);
+    font-weight:600;display:flex;align-items:center;gap:6px;
+}
+.card h3::before{content:"";width:4px;height:4px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.card p{margin:0;font-size:13px;line-height:1.75;color:var(--ink-dim)}
+.card ul{margin:0;padding-left:16px}
+.card li{font-size:12.5px;line-height:1.72;color:var(--ink-dim);margin-bottom:3px}
+.card li::marker{color:var(--accent)}
+.card.summary{border-left:3px solid var(--accent)}
+.card.summary p{color:var(--ink);font-size:13.5px;font-weight:500}
+.card.warncard{border-left:3px solid var(--warn)}
+.card.warncard h3::before{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.card.warncard p{color:var(--ink)}
+
+/* 数据速查表 */
+.dtable{width:100%;border-collapse:collapse;font-size:12px}
+.dtable th{
+    text-align:left;font-weight:600;color:var(--ink-faint);font-size:10.5px;
+    letter-spacing:.6px;padding:4px 6px;border-bottom:1px solid var(--glass-brd);
+}
+.dtable td{padding:5px 6px;color:var(--ink-dim);border-bottom:1px dashed var(--glass-brd);vertical-align:top}
+.dtable td.num{font-family:var(--font-mono);white-space:nowrap;color:var(--ink)}
+.dtable tr.hl{background:var(--accent-soft)}
+.dtable tr.hl td{color:var(--ink);font-weight:500}
+.dtable tr.hl td.num{color:var(--accent)}
+.dread{margin-top:8px;font-size:12px;line-height:1.7;color:var(--accent-3);border-left:2px solid var(--accent-3);padding-left:8px}
+
+/* =====================================================================
+   五、右侧主区 / 3D 舞台
+   ===================================================================== */
+.main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;padding:12px;gap:10px}
+/* 误区页明确划分画布与讲解区，避免控制面板把下方内容挤出视口。 */
+.main.myths-mode .stage{flex:0 0 55%}
+.main.myths-mode>.card.panel-scroll{flex:1 1 0;overflow-y:scroll}
+.stage{
+    /* 画布和控制面板分占两行，控制区不再覆盖 3D 画面。 */
+    position:relative;display:grid;grid-template-rows:minmax(0,1fr) auto;
+    flex:1 1 auto;min-height:0;border-radius:var(--r-lg);overflow:hidden;
+    border:1px solid var(--glass-brd);background:rgba(0,0,0,.16);box-shadow:var(--shadow);
+}
+.canvas-wrap{position:relative;grid-row:1;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center}
+/* margin:auto 让画布在容器里始终居中：万一画布被夹到比容器小（例如异常尺寸被兜底限制），
+   它也不会跑到左上角，而是仍然居中显示 */
+.canvas-wrap canvas{display:block;width:100%;height:100%;margin:auto}
+
+/* 舞台顶部只保留阶段提示；播放与分步操作集中在下方主操作区。 */
+.stage-top{
+    position:absolute;grid-area:1 / 1 / 2 / 2;
+    left:12px;top:12px;right:12px;z-index:6;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;pointer-events:none;
+}
+.seg{
+    display:inline-flex;padding:3px;gap:3px;pointer-events:auto;
+    background:var(--glass-2);border:1px solid var(--glass-brd);border-radius:999px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+}
+.seg button{
+    min-height:28px;padding:0 10px;cursor:pointer;border:none;border-radius:999px;
+    font-family:var(--font-body);font-size:11.5px;color:var(--ink-dim);background:transparent;
+    transition:all .16s ease;white-space:nowrap;
+}
+.seg button:hover{color:var(--ink)}
+.seg button:hover:not(.on):not(:disabled){background:var(--accent-soft)}
+.seg button.on{background:linear-gradient(140deg,var(--accent),var(--accent-2));color:#03121f;font-weight:600}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+body.light-theme .seg button.on{color:#fff}
+.phase-tag{
+    pointer-events:none;display:inline-flex;align-items:center;gap:8px;
+    min-height:34px;padding:0 13px;border-radius:999px;
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    font-size:12.5px;color:var(--ink);backdrop-filter:blur(12px);
+}
+.phase-tag b{font-family:var(--font-mono);color:var(--accent)}
+
+/* 屏幕空间浮标层（键长标注 / Πₙᵐ 标注） */
+.float-layer{position:absolute;inset:0;z-index:5;pointer-events:none}
+.fl{
+    position:absolute;transform:translate(-50%,-50%);
+    font-size:11.5px;font-family:var(--font-mono);color:var(--ink);
+    padding:2px 7px;border-radius:999px;white-space:nowrap;
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(8px);transition:opacity .25s ease;
+}
+.fl.pi{font-family:var(--font-display);font-size:17px;padding:4px 12px;color:var(--accent);border-color:var(--accent)}
+.fl.pi sub{font-size:11px}
+.fl.pi sup{font-size:11px}
+
+/* 图例 */
+.legend{
+    position:absolute;grid-area:1 / 1 / 2 / 2;left:12px;right:auto;bottom:12px;z-index:6;
+    display:flex;flex-direction:column;gap:6px;
+    padding:9px 11px;border-radius:var(--r-md);
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(12px);font-size:11.5px;color:var(--ink-dim);
+}
+.legend .row{display:flex;align-items:center;gap:7px}
+.legend .dot{width:10px;height:10px;border-radius:50%;box-shadow:0 0 calc(10px * var(--glow)) currentColor}
+.legend .symbol{width:16px;height:16px;display:grid;place-items:center;border:1px solid var(--accent-3);border-radius:5px;color:var(--accent-3);font-family:var(--font-display);font-size:12px}
+
+/* 有效重叠指示条（相位模块） */
+.meter{
+    position:absolute;grid-area:1 / 1 / 2 / 2;
+    left:50%;bottom:12px;transform:translateX(-50%);z-index:6;
+    width:min(420px,72%);padding:10px 13px;border-radius:var(--r-md);
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(12px);
+}
+.meter .lab{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-dim);margin-bottom:6px}
+.meter .lab b{font-family:var(--font-mono);font-size:13px;color:var(--accent)}
+.meter .bar{height:8px;border-radius:6px;background:rgba(127,150,190,.22);overflow:hidden}
+.meter .fill{height:100%;border-radius:6px;transition:width .45s ease,background .45s ease;
+    background:linear-gradient(90deg,var(--accent),var(--accent-3));box-shadow:0 0 14px var(--accent)}
+.meter.bad .fill{background:linear-gradient(90deg,var(--bad),var(--warn));box-shadow:0 0 14px var(--bad)}
+.meter.bad .lab b{color:var(--bad)}
+.meter .note{margin-top:6px;font-size:11.5px;line-height:1.6;color:var(--ink-faint)}
+
+/* 分步讲解气泡 */
+.step-bubble{
+    position:absolute;grid-area:1 / 1 / 2 / 2;left:12px;bottom:12px;z-index:7;
+    width:min(430px,86%);padding:14px 16px;border-radius:var(--r-lg);
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(14px);box-shadow:var(--shadow);
+}
+.step-bubble .no{
+    display:inline-flex;align-items:center;gap:7px;font-size:11px;letter-spacing:1.2px;
+    color:var(--accent);font-family:var(--font-mono);margin-bottom:7px;
+}
+.step-bubble .txt{font-size:13.5px;line-height:1.8;color:var(--ink)}
+.step-bubble .dots{display:flex;gap:4px;margin-top:10px}
+.step-bubble .dots i{width:16px;height:3px;border-radius:3px;background:var(--glass-brd)}
+.step-bubble .dots i.on{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+/* 误区模块的对比结论贴着按钮展示；文字与云团断开效果一起说明科学边界。 */
+.model-readout{
+    font-size:11.5px;line-height:1.45;color:var(--ink-dim);
+}
+.model-readout strong{font-weight:600;color:var(--bad)}
+.model-readout.actual strong{color:var(--accent-3)}
+.model-readout small{font-size:10.5px;color:var(--ink-faint)}
+
+/* 控制面板：主操作始终可见，详细设置按需展开。 */
+.control-panel{
+    /* 主要操作占满一行；次要操作展开时仍用多列压缩高度。 */
+    position:relative;grid-row:2;left:auto;right:auto;bottom:auto;z-index:8;
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:4px 10px;min-height:0;margin:0 10px 8px;align-self:end;
+    padding:6px 8px;border-radius:var(--r-lg);
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);
+    box-shadow:var(--shadow-soft);
+    max-height:none;overflow:visible;
+}
+.control-panel>.cp-row:first-child,
+.control-panel>.cp-row.wide-row{grid-column:1 / -1}
+.cp-extra{
+    grid-column:1 / -1;display:grid;grid-template-columns:inherit;gap:4px 10px;
+    padding-top:5px;border-top:1px solid var(--glass-brd);
+}
+.cp-extra>.wide-row{grid-column:1 / -1}
+.cp-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.cp-row + .cp-row{margin:0;padding:0;border:0}
+.cp-lab{font-size:11px;color:var(--ink-faint);letter-spacing:.8px;flex:0 0 auto}
+.range-control{display:flex;align-items:center;gap:6px;min-width:0}
+.compact-slider{flex:0 1 140px;min-width:80px;max-width:150px}
+.top-control-row{gap:8px}
+.primary-row .range-control{flex:1 1 180px}
+.primary-row .compact-slider{flex:1 1 130px;max-width:none}
+.primary-row>.seg{flex:0 0 auto}
+.primary-row .step-actions{flex:0 0 auto}
+.primary-row .details-button{margin-left:auto}
+.selector-row{flex-wrap:nowrap;gap:5px}
+.selector-row .seg{min-width:0;gap:1px;padding:2px;flex-wrap:wrap}
+.selector-row .seg button{min-height:26px;padding:0 7px;font-size:10.5px}
+
+/* 播放按钮组 */
+.pbtn{
+    width:32px;height:32px;flex:0 0 32px;cursor:pointer;border-radius:9px;
+    display:grid;place-items:center;font-size:14px;
+    color:var(--ink);background:var(--glass);border:1px solid var(--glass-brd);
+    transition:all .16s ease;
+}
+.pbtn:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.pbtn.primary{background:linear-gradient(140deg,var(--accent),var(--accent-2));color:#03121f;border-color:transparent;font-weight:700}
+body.light-theme .pbtn.primary{color:#fff}
+
+/* 滑块 */
+.slider-wrap{flex:1 1 145px;min-width:110px;display:flex;align-items:center;gap:6px}
+input[type=range]{
+    -webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;cursor:pointer;
+}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:6px;background:rgba(127,150,190,.28)}
+input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:20px;height:20px;margin-top:-7px;border-radius:50%;
+    background:linear-gradient(140deg,var(--accent),var(--accent-3));
+    border:2px solid var(--bg-0);box-shadow:0 0 12px var(--accent);
+}
+input[type=range]::-moz-range-track{height:6px;border-radius:6px;background:rgba(127,150,190,.28)}
+input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;border:2px solid var(--bg-0);
+    background:var(--accent);box-shadow:0 0 12px var(--accent)}
+.val{font-family:var(--font-mono);font-size:11px;color:var(--accent);min-width:42px;text-align:right}
+
+/* 开关 */
+.sw{
+    display:inline-flex;align-items:center;gap:5px;min-height:27px;padding:0 7px;cursor:pointer;
+    font-size:11px;color:var(--ink-faint);border-radius:999px;
+    background:transparent;border:1px solid var(--glass-brd);transition:all .16s ease;
+}
+.sw:hover{color:var(--ink)}
+.sw i{width:8px;height:8px;border-radius:50%;background:var(--glass-brd);transition:all .16s ease}
+.sw.on{color:var(--ink);border-color:var(--accent);background:var(--accent-soft)}
+.sw.on i{background:var(--accent);box-shadow:0 0 9px var(--accent)}
+
+/* 侧栏手风琴（竞赛拓展） */
+.acc-head{
+    width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;
+    min-height:40px;padding:0 2px;background:transparent;border:none;
+    color:var(--ink);font-family:var(--font-body);font-size:13px;
+}
+.acc-head .arw{transition:transform .25s ease;color:var(--ink-faint)}
+.acc-head.open .arw{transform:rotate(90deg);color:var(--accent)}
+.acc-body{padding-top:4px}
+
+/* =====================================================================
+   六、模块 0 判据小工具 / 模块 8 误区 / 模块 9 自测
+   ===================================================================== */
+.tool{
+    position:absolute;grid-area:1 / 1 / 2 / 2;
+    right:0;top:64px;bottom:12px;z-index:7;
+    display:flex;flex-direction:column;
+    width:min(330px,88%);overflow-y:auto;
+    padding:13px 14px 13px 40px;border-radius:var(--r-lg);
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    backdrop-filter:blur(14px);box-shadow:var(--shadow);
+    transition:transform .28s ease;
+}
+.tool.collapsed{transform:translateX(calc(100% - 34px))}
+/* 收起后只保留把手，隐藏的判据按钮不再进入键盘 Tab 顺序。 */
+.tool.collapsed>*:not(.tool-toggle){visibility:hidden}
+.tool-toggle{
+    position:absolute;left:0;top:50%;z-index:2;transform:translateY(-50%);
+    width:34px;height:76px;display:grid;place-items:center;cursor:pointer;
+    color:var(--accent);font-size:12px;line-height:1.2;writing-mode:vertical-rl;
+    background:var(--glass-2);border:1px solid var(--glass-brd);
+    border-radius:0 9px 9px 0;
+}
+.tool-toggle:hover{color:var(--ink);border-color:var(--accent)}
+.tool>*{flex:0 0 auto}
+.tool>.verdict{margin-top:auto}
+.tool h4{margin:0 0 9px;font-size:12px;letter-spacing:1.1px;color:var(--ink-faint);font-weight:600}
+.q-line{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px dashed var(--glass-brd)}
+.q-line span{font-size:12.5px;color:var(--ink-dim);line-height:1.6}
+.yn{display:flex;gap:5px;flex:0 0 auto}
+.yn button{
+    min-width:34px;min-height:30px;cursor:pointer;border-radius:8px;font-size:12px;
+    color:var(--ink-faint);background:transparent;border:1px solid var(--glass-brd);transition:all .15s ease;
+}
+.yn button:hover{color:var(--ink)}
+.yn button.on{color:#04121f;background:linear-gradient(140deg,var(--accent),var(--accent-3));border-color:transparent;font-weight:700}
+body.light-theme .yn button.on{color:#fff}
+.atom-pick{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 4px}
+.atom-pick .cell{
+    display:flex;flex-direction:column;align-items:center;gap:2px;
+    padding:7px 9px;border-radius:10px;border:1px solid var(--glass-brd);background:var(--glass);
+}
+.atom-pick .cell b{font-size:14px;font-family:var(--font-mono);color:var(--ink)}
+.atom-pick .cell .mini{display:flex;gap:3px}
+.atom-pick .cell .mini button{
+    width:24px;height:24px;cursor:pointer;border-radius:6px;font-size:11px;
+    background:transparent;border:1px solid var(--glass-brd);color:var(--ink-faint);
+}
+.atom-pick .cell .mini button.on{background:var(--accent);color:#04121f;border-color:transparent;font-weight:700}
+.verdict{
+    margin-top:10px;padding:11px 12px;border-radius:var(--r-md);
+    background:var(--accent-soft);border:1px solid var(--glass-brd);
+}
+.verdict .big{font-family:var(--font-display);font-size:30px;color:var(--accent);line-height:1.1}
+.verdict .big sub{font-size:15px}
+.verdict .big sup{font-size:15px}
+.verdict .big.x{color:var(--bad)}
+.verdict .why{margin-top:6px;font-size:12.5px;line-height:1.75;color:var(--ink-dim)}
+
+/* 误区卡 */
+.myth{
+    padding:12px 13px;border-radius:var(--r-md);border:1px solid var(--glass-brd);
+    background:var(--glass);
+}
+.myth + .myth{margin-top:8px}
+.myth .say{font-size:13px;color:var(--ink);line-height:1.7}
+.myth .say em{color:var(--bad);font-style:normal;font-weight:600}
+.myth .ask{display:flex;align-items:center;gap:8px;margin-top:8px}
+.myth .reveal{margin-top:9px;padding:10px 11px;border-radius:10px;background:var(--accent-soft);border-left:2px solid var(--ok)}
+.myth .reveal .fix{font-size:13px;line-height:1.8;color:var(--ink)}
+.myth .reveal .why{font-size:12.5px;line-height:1.75;color:var(--ink-dim);margin-top:5px}
+.my-cmp{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.my-cmp .box{padding:9px;border-radius:10px;border:1px solid var(--glass-brd);background:rgba(0,0,0,.14)}
+.my-cmp .box.bad2{border-color:var(--bad)}
+.my-cmp .box.good2{border-color:var(--ok)}
+.my-cmp .box .t{font-size:11.5px;margin-bottom:5px;color:var(--ink-faint)}
+.my-cmp .box.bad2 .t{color:var(--bad)}
+.my-cmp .box.good2 .t{color:var(--ok)}
+
+/* 自测 */
+.quiz{flex:1;min-height:0;overflow-y:auto;padding-right:4px}
+.qhead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.qhead .score{font-family:var(--font-mono);font-size:13px;color:var(--accent)}
+.qbar{height:7px;border-radius:6px;background:rgba(127,150,190,.22);overflow:hidden;margin-bottom:12px}
+.qbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-3));transition:width .35s ease}
+.qcard{padding:16px;border-radius:var(--r-lg);border:1px solid var(--glass-brd);background:var(--glass)}
+.qcard .qno{font-size:11px;letter-spacing:1.2px;color:var(--accent);font-family:var(--font-mono)}
+.qcard .qt{font-size:14.5px;line-height:1.85;color:var(--ink);margin:7px 0 12px}
+.opt{
+    display:flex;align-items:flex-start;gap:9px;width:100%;text-align:left;cursor:pointer;
+    min-height:44px;padding:10px 12px;margin-bottom:7px;border-radius:var(--r-md);
+    font-size:13px;line-height:1.7;color:var(--ink-dim);
+    background:transparent;border:1px solid var(--glass-brd);transition:all .16s ease;
+}
+.opt:hover{border-color:var(--accent);color:var(--ink);background:var(--accent-soft)}
+.opt .k{
+    flex:0 0 22px;height:22px;border-radius:6px;display:grid;place-items:center;
+    font-family:var(--font-mono);font-size:11px;background:var(--accent-soft);color:var(--accent);
+}
+.opt.right{border-color:var(--ok);background:rgba(61,220,154,.12);color:var(--ink)}
+.opt.right .k{background:var(--ok);color:#04121f}
+.opt.wrong{border-color:var(--bad);background:rgba(255,107,129,.12);color:var(--ink)}
+.opt.wrong .k{background:var(--bad);color:#fff}
+.opt:disabled{cursor:default}
+.fb{margin-top:10px;padding:11px 13px;border-radius:var(--r-md);border:1px solid var(--glass-brd);background:var(--accent-soft)}
+.fb .res{font-size:13px;font-weight:600;margin-bottom:4px}
+.fb .res.y{color:var(--ok)}
+.fb .res.n{color:var(--bad)}
+.fb .txt{font-size:12.5px;line-height:1.8;color:var(--ink-dim)}
+.diagram{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:4px 0 10px}
+.diagram .d{padding:8px;border-radius:var(--r-md);border:1px solid var(--glass-brd);background:rgba(0,0,0,.16);text-align:center}
+.diagram .d .cap{font-size:11.5px;color:var(--ink-faint);margin-top:5px}
+.match{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:6px}
+.match .col h5{margin:0 0 7px;font-size:11.5px;color:var(--ink-faint);letter-spacing:.8px;font-weight:600}
+.mchip{
+    display:flex;align-items:center;justify-content:center;width:100%;min-height:44px;margin-bottom:7px;cursor:pointer;
+    border-radius:var(--r-md);border:1px solid var(--glass-brd);background:var(--glass);
+    font-size:13.5px;color:var(--ink);transition:all .16s ease;user-select:none;
+}
+.mchip:hover:not(:disabled){border-color:var(--accent)}
+.mchip:disabled{cursor:default}
+.mchip.done:disabled{opacity:1}
+.mchip.sel{border-color:var(--accent);background:var(--accent-soft);box-shadow:0 0 12px -4px var(--accent)}
+.mchip.done{border-color:var(--ok);background:rgba(61,220,154,.14);cursor:default;color:var(--ok)}
+.mchip sub{font-size:10px}
+.mchip sup{font-size:10px}
+
+/* =====================================================================
+   七、响应式：移动端 / 竖屏平板改为上下堆叠，3D 画面优先占上半屏
+   ===================================================================== */
+.mobile-tabs{display:none}
+@media (min-width:900px){
+    /* 横向空间足够时，详细设置里的视角和物种并排显示。 */
+    .control-panel{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (min-width:1081px){
+    /* 仅误区模块：加宽右侧操作栏，让按钮少换行；省出的高度留给下方讲解卡。 */
+    .main.myths-mode .stage{
+        flex-basis:clamp(270px,34%,320px);
+        grid-template-columns:minmax(0,1fr) clamp(400px,34%,480px);
+        grid-template-rows:minmax(0,1fr);
+    }
+    .main.myths-mode .canvas-wrap{grid-column:1}
+    .main.myths-mode .control-panel{
+        grid-column:2;grid-row:1;align-self:stretch;align-content:start;
+        grid-template-columns:minmax(0,1fr);margin:7px;padding:7px;
+    }
+    .main.myths-mode .control-panel .primary-row .range-control{flex:1 1 150px}
+    .main.myths-mode .control-panel .cp-extra{grid-template-columns:minmax(0,1fr)}
+    .main.myths-mode .control-panel .selector-row{flex-wrap:wrap}
+    .main.myths-mode .control-panel .model-readout{
+        flex-direction:column;align-items:flex-start;gap:2px;
+    }
+    /* 分步与详细设置需要更多高度时暂时借用讲解卡的空间，收起后自动还回去。 */
+    .main.myths-mode .stage.step-view{flex-basis:clamp(315px,40%,370px)}
+    .main.myths-mode .stage.settings-open{flex-basis:clamp(450px,60%,570px)}
+}
+@media (max-width:1080px){
+    /* 窄屏 / 竖屏：上下堆叠。
+       页面不滚动；主区与侧栏分用视口空间，长文字在各自区域内滚动。 */
+    body{overflow:hidden}
+    .shell{flex-direction:column;flex:1 1 auto;height:auto;min-height:0}
+    .main{
+        order:1;padding:10px;flex:0 0 min(75%, calc(100% - 90px));
+        min-height:0;overflow:hidden;
+    }
+    /* 普通模块的舞台占满主区；误区模块也给讲解卡留出固定空间。 */
+    .stage{min-height:0;flex:1 1 auto}
+    .main.myths-mode .stage{flex:0 0 55%;min-height:0}
+    .sidebar{
+        order:2;width:100%;flex:1 1 auto;min-height:0;overflow:hidden;
+        border-right:none;border-top:1px solid var(--glass-brd);
+        padding:10px 10px 0;
+    }
+    .nav{flex-direction:row;overflow-x:auto;gap:6px;padding-bottom:4px;scrollbar-width:thin;flex:0 0 auto}
+    .nav-item{flex:0 0 auto}
+    .nav-item .t{white-space:nowrap}
+    .nav-sec{display:none}
+    /* 信息卡自己在这一块里滚（整页不滚） */
+    .side-cards{flex:1 1 auto;min-height:0;overflow-y:auto;padding-bottom:18px;scrollbar-width:thin}
+    /* 模块 8 的误区卡 / 模块 9 的题卡：占满剩余高度并内部滚动，内容不会被挤出视口 */
+    .main > .card{flex:1 1 auto;min-height:0;overflow-y:auto}
+    .quiz{flex:1 1 auto;min-height:0;overflow-y:auto}
+    /* 窄屏下说明卡靠上；相机把这些顶部占位计入可视区域。 */
+    .meter{left:10px;right:10px;width:auto;top:52px;bottom:auto;transform:none}
+    .step-bubble{left:10px;right:10px;width:auto;top:52px;bottom:auto}
+    .tool{left:auto;right:0;top:52px;bottom:10px;width:min(330px,calc(100% - 30px));max-height:none}
+    .legend{font-size:10.5px;left:8px;right:auto;bottom:8px}
+    /* 提示始终留在局部滚动区域顶部，学生知道内容还可以继续滑动。 */
+    .scroll-hint{
+        position:sticky;top:0;z-index:2;display:block;flex:0 0 auto;
+        padding:4px 8px;margin-bottom:5px;border-radius:7px;
+        background:var(--glass-2);color:var(--ink-dim);font-size:10.5px;
+    }
+    .nav-scroll-hint{position:static;margin:0}
+    .side-cards,.panel-scroll,.quiz,.tool{overscroll-behavior:contain;scrollbar-width:thin}
+    .side-cards::-webkit-scrollbar,.panel-scroll::-webkit-scrollbar,.quiz::-webkit-scrollbar,.tool::-webkit-scrollbar{width:6px}
+    .side-cards::-webkit-scrollbar-thumb,.panel-scroll::-webkit-scrollbar-thumb,.quiz::-webkit-scrollbar-thumb,.tool::-webkit-scrollbar-thumb{background:var(--ink-faint);border-radius:6px}
+    .control-panel{padding:7px 8px;margin:0 8px 8px}
+    .cp-row{gap:5px}
+    .cp-row + .cp-row{margin:0;padding:0}
+    .pbtn{width:30px;height:30px;flex-basis:30px}
+    .seg button{min-height:27px;padding:0 9px;font-size:11.5px}
+    .sw{min-height:27px;padding:0 7px;font-size:11px}
+    .slider-wrap{flex:1 1 105px;min-width:95px;gap:4px}
+    .compact-slider{flex:1 1 80px;min-width:70px;max-width:150px}
+    .cp-lab{font-size:10px}
+}
+@media (max-width:560px){
+    .topbar{gap:8px;padding:0 8px}
+    .brand{flex:0 0 auto;gap:7px}
+    .brand h1{font-size:14px}
+    .brand-mark{width:32px;height:32px;flex-basis:32px;font-size:18px}
+    .chip{padding:0 9px;font-size:11.5px;min-height:32px}
+    .seg button{padding:0 10px;font-size:12px}
+    .cp-extra{grid-template-columns:1fr}
+    .cp-extra .sw{min-height:24px;padding:0 5px;font-size:10px}
+    /* 竖屏里说明浮层限制高度，模型可留出完整的观察区域。 */
+    .step-bubble{max-height:min(120px,30vh);overflow-y:auto}
+    .meter{padding:7px 10px}
+    .meter .note{display:none}
+    .stage.step-view .legend,.stage.settings-open .legend{display:none}
+    .scroll-hint{font-size:10px;padding:3px 7px}
+    .my-cmp,.diagram,.match{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+    .aurora .blob{animation:none}
+    .chip,.pbtn,.nav-item,.seg button,.sw{transition:none}
+}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+    <!-- ===== 背景层 ===== -->
+    <div class="aurora" aria-hidden="true">
+        <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+        <span class="grain"></span>
+    </div>
+
+    <!-- ===== 顶栏 ===== -->
+    <header class="topbar">
+        <div class="brand">
+            <span class="brand-mark">π</span>
+            <div>
+                <h1>大 π 键成键可视化<span class="series-name">AI赋能高中化学教学系列 by 实验中学</span></h1>
+            </div>
+        </div>
+        <div class="top-actions">
+            <button class="chip" :class="{on:unifiedColor}" @click="unifiedColor=!unifiedColor"
+                    :aria-pressed="unifiedColor"
+                    title="把红蓝两色统一成同一种颜色，避免把相位误读成电荷">统一配色</button>
+            <button class="chip" :class="{on:isLight}" @click="toggleTheme" :aria-pressed="isLight">{{ isLight ? '浅色' : '深色' }}</button>
+            <button class="chip" :class="{on:quality==='low'}" @click="toggleQuality" :aria-pressed="quality==='low'">
+                {{ quality==='high' ? '高画质' : '低画质' }}
+            </button>
+        </div>
+    </header>
+
+    <div class="shell">
+        <!-- ===== 左侧：模块导航 + 当前模块信息卡 ===== -->
+        <aside class="sidebar">
+            <div class="nav-sec">模块导航</div>
+            <nav class="nav" aria-label="模块导航，窄屏可左右滑动">
+                <button v-for="m in modules" :key="m.id" class="nav-item"
+                        :class="{active:m.id===currentId}" @click="go(m.id)"
+                        :aria-current="m.id===currentId ? 'page' : undefined"
+                        :title="m.title">
+                    <span class="idx">{{ m.no }}</span>
+                    <span class="t">{{ m.title }}</span>
+                    <span class="star" v-if="m.star">★</span>
+                </button>
+            </nav>
+            <div class="scroll-hint nav-scroll-hint">← 左右滑动模块导航，查看其他专题 →</div>
+
+            <!-- 信息卡区域：单独包一层，方便在窄屏下让它自己内部滚动，
+                 这样整页就不会出现滚动条，画布也不会被挤出去 -->
+            <div class="side-cards">
+            <div class="scroll-hint">↓ 下方要点、数据和拓展内容可继续滑动</div>
+
+            <!-- 要点 -->
+            <div class="card">
+                <h3>要点</h3>
+                <ul><li v-for="(k,i) in cur.keys" :key="i" v-html="k"></li></ul>
+            </div>
+
+            <!-- 一句话总结 -->
+            <div class="card summary">
+                <h3>一句话总结</h3>
+                <p v-html="cur.summary"></p>
+            </div>
+
+            <!-- 易错提醒 -->
+            <div class="card warncard">
+                <h3>易错提醒</h3>
+                <p v-html="cur.pitfall"></p>
+            </div>
+
+            <!-- 数据速查 -->
+            <div class="card">
+                <h3>数据速查</h3>
+                <table class="dtable">
+                    <thead><tr><th>项目</th><th>数值</th></tr></thead>
+                    <tbody>
+                        <tr v-for="d in dataTable" :key="d.key" :class="{hl:d.hl.includes(currentId)}">
+                            <td v-html="d.label"></td>
+                            <td class="num" v-html="d.value"></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="dread" v-html="dataRead"></div>
+                <div style="margin-top:6px;font-size:10.5px;color:var(--ink-faint)"
+                     v-html="'数据来源：' + DATA_SOURCE"></div>
+            </div>
+
+            <!-- 红蓝相位说明（拓展内容声明 + 统一配色开关） -->
+            <div class="card">
+                <h3>红蓝两色是什么？</h3>
+                <p>
+                    红蓝表示<b>单个示意 π 轨道</b>波函数的正负相位，不是电荷，也不是整个分子的电子密度。
+                    球棍连接与键长按结构数据绘制；圆柱只表示 σ 骨架连接，<b>不表示 σ 电子云</b>。
+                    粒子云采用简化 LCAO 相位图，未计算所有占据轨道，不能用于测量真实电荷密度或能量。
+                </p>
+                <button class="chip" style="margin-top:9px" :class="{on:unifiedColor}" @click="unifiedColor=!unifiedColor" :aria-pressed="unifiedColor">
+                    {{ unifiedColor ? '已统一配色' : '一键统一配色' }}
+                </button>
+            </div>
+
+            <!-- 竞赛拓展（默认折叠） -->
+            <div class="card">
+                <button class="acc-head" :class="{open:advOpen}" @click="advOpen=!advOpen" :aria-expanded="advOpen">
+                    <span>竞赛拓展物种</span><span class="arw">›</span>
+                </button>
+                <div class="acc-body" v-show="advOpen">
+                    <div style="font-size:12px;line-height:1.75;color:var(--ink-dim)" v-html="cur.advancedNote"></div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px">
+                        <button v-for="s in CURATED_SPECIES" :key="s.id"
+                                class="chip" :class="{on:specimenId===s.id}"
+                                @click="quickSpecimen(s.id)">{{ s.name }}</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 使用说明 + 参数对照表 -->
+            <div class="card">
+                <button class="acc-head" :class="{open:helpOpen}" @click="helpOpen=!helpOpen" :aria-expanded="helpOpen">
+                    <span>使用说明 / 教师改参</span><span class="arw">›</span>
+                </button>
+                <div class="acc-body" v-show="helpOpen">
+                    <div style="font-size:12.5px;line-height:1.85;color:var(--ink-dim)">
+                        <b style="color:var(--ink)">学生这样用</b><br>
+                        ① 先在「0 大 π 键是什么」用判定小工具把判据玩明白；
+                        ② 进「2 苯 Π₆⁶」点<b>自动播放</b>看整体，再点<b>分步讲解</b>一步步看；
+                        ③ 拖<b>间距滑块</b>把原子拉开推近，体会「重叠程度」；
+                            ④ 去「3 相位与轨道节点」切换相位，比较两种<b>单轨道示意</b>的节点；
+                        ⑤ 最后做「9 互动自测」。<br><br>
+                        <b style="color:var(--ink)">教师这样用</b><br>
+                        投影前切<b>浅色主题</b>（明亮教室）或深色（关灯教室）；
+                        用地址栏 <code>#benzene</code> 这类锚点直达当堂模块；
+                        讲课时用<b>分步讲解</b>配合板书，需要视角、间距等选项时点击「详细设置」。
+                    </div>
+                    <table class="dtable" style="margin-top:10px">
+                        <thead><tr><th>想改什么</th><th>去改哪里</th></tr></thead>
+                        <tbody>
+                            <tr><td>电子云亮度 / p 轨道胖瘦</td><td class="num">RENDER_TUNING</td></tr>
+                            <tr><td>相位颜色（红 / 蓝）</td><td class="num">colorPos / colorNeg</td></tr>
+                            <tr><td>轨道大小比例</td><td class="num">各物种 atomScale</td></tr>
+                            <tr><td>起始与成键距离</td><td class="num">updateXxx 的 endDist</td></tr>
+                            <tr><td>点阵密度 / 包围盒</td><td class="num">gridSize / range</td></tr>
+                            <tr><td>播放速度步长</td><td class="num">STEP_PER_FRAME</td></tr>
+                            <tr><td>预设视角</td><td class="num">各物种 viewPresets</td></tr>
+                            <tr><td>键长数据表</td><td class="num">DATA_TABLE</td></tr>
+                            <tr><td>自测题库</td><td class="num">QUIZ_BANK</td></tr>
+                            <tr><td>误区对照内容</td><td class="num">MYTHS</td></tr>
+                            <tr><td>深浅主题配色</td><td class="num">:root / body.light-theme</td></tr>
+                            <tr><td>动画阶段时间区间</td><td class="num">phaseRanges</td></tr>
+                            <tr><td>分步讲解文案</td><td class="num">各物种 stepTexts</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            </div><!-- /.side-cards -->
+        </aside>
+
+        <!-- ===== 右侧主区 ===== -->
+        <main class="main" :class="{'myths-mode':currentId==='myths'}">
+            <!-- 3D 舞台（模块 0~8） -->
+            <div class="stage" :class="{'step-view':mode==='step','settings-open':panelOpen}" v-show="currentId!=='quiz'">
+                <div class="canvas-wrap" ref="wrap"></div>
+
+                <!-- 浮标层：键长标注 / Πₙᵐ 标注（屏幕空间浮标，随相机投影实时定位） -->
+                <div class="float-layer" ref="floatLayer"></div>
+
+                <!-- 舞台只显示当前阶段，操作按钮统一放在下方主操作区。 -->
+                <div class="stage-top" v-if="mode==='auto'">
+                    <div class="phase-tag">
+                        <span>当前阶段</span><b>{{ curPhaseName }}</b>
+                        <span style="color:var(--ink-faint)">{{ progressPct }}%</span>
+                    </div>
+                </div>
+
+                <!-- 图例 -->
+                <div class="legend" v-if="toggles.orb || cloudVisible" aria-label="当前可见轨道的图例">
+                    <div class="row" v-if="!unifiedColor">
+                        <span class="dot" :style="{background:'var(--pos)',color:'var(--pos)'}"></span>
+                        <span>正相位（波函数 +）</span>
+                    </div>
+                    <div class="row" v-if="!unifiedColor">
+                        <span class="dot" :style="{background:'var(--neg)',color:'var(--neg)'}"></span>
+                        <span>负相位（波函数 −）</span>
+                    </div>
+                    <div class="row" v-else>
+                        <span class="dot" :style="{background:'var(--accent)',color:'var(--accent)'}"></span>
+                        <span>相位已统一配色（非总密度）</span>
+                    </div>
+                    <div class="row" v-if="cloudVisible">
+                        <span class="symbol" aria-hidden="true">π</span>
+                        <span>离域云：轨道组合示意</span>
+                    </div>
+                </div>
+
+                <!-- 有效重叠指示条（相位模块） -->
+                <div class="meter" :class="{bad:overlapWeight<50}" v-if="cur.meter">
+                    <div class="lab"><span>无节点组合示意强度（非重叠积分）</span><b>{{ Math.round(overlapWeight) }}%</b></div>
+                    <div class="bar"><div class="fill" :style="{width:overlapWeight+'%'}"></div></div>
+                    <div class="note">{{ overlapNote }}</div>
+                </div>
+
+                <!-- 分步讲解气泡 -->
+                <div class="step-bubble" v-if="mode==='step'">
+                    <div class="scroll-hint">↓ 讲解文字可在此卡片中滑动</div>
+                    <div class="no">STEP {{ stepIndex+1 }} / {{ cur.steps.length }}</div>
+                    <div class="txt" v-html="cur.steps[stepIndex].text"></div>
+                    <div class="dots">
+                        <i v-for="(s,i) in cur.steps" :key="i" :class="{on:i===stepIndex}"></i>
+                    </div>
+                </div>
+
+                <!-- 模块 0：判据交互小工具 -->
+                <div class="tool" :class="{collapsed:!toolOpen}" v-if="currentId==='intro'">
+                    <button class="tool-toggle" @click.stop="toolOpen=!toolOpen"
+                            :aria-expanded="toolOpen"
+                            :aria-label="toolOpen ? '收起判据小工具' : '展开判据小工具'"
+                            :title="toolOpen ? '向右收起判据小工具' : '展开判据小工具'">
+                        {{ toolOpen ? '收起 ›' : '判据 ‹' }}
+                    </button>
+                    <div class="scroll-hint">↓ 判据与预设可在本工具中上下滑动</div>
+                    <h4>判据小工具 · 先自己判一判</h4>
+                    <div class="q-line">
+                        <span>① 参与原子是否<b>共平面</b>？</span>
+                        <div class="yn">
+                            <button :class="{on:judge.coplanar===true}" :aria-pressed="judge.coplanar===true" @click="judge.coplanar=true">是</button>
+                            <button :class="{on:judge.coplanar===false}" :aria-pressed="judge.coplanar===false" @click="judge.coplanar=false">否</button>
+                        </div>
+                    </div>
+                    <div class="q-line">
+                        <span>② 是否每个原子都有一个<b>垂直于该平面的 p 轨道</b>？</span>
+                        <div class="yn">
+                            <button :class="{on:judge.perp===true}" :aria-pressed="judge.perp===true" @click="judge.perp=true">是</button>
+                            <button :class="{on:judge.perp===false}" :aria-pressed="judge.perp===false" @click="judge.perp=false">否</button>
+                        </div>
+                    </div>
+                    <div class="q-line" style="border-bottom:none">
+                        <span>③ 每个原子贡献几个 π 电子？（两个端位/带负电的原子可贡献 2）</span>
+                    </div>
+                    <div class="atom-pick">
+                        <div class="cell" v-for="(a,i) in judge.atoms" :key="i">
+                            <b>{{ a.el }}</b>
+                            <div class="mini">
+                                <button :class="{on:a.e===1}" :aria-label="'第 '+(i+1)+' 个 '+a.el+' 原子贡献 1 个 π 电子'" :aria-pressed="a.e===1" @click="a.e=1">1</button>
+                                <button :class="{on:a.e===2}" :aria-label="'第 '+(i+1)+' 个 '+a.el+' 原子贡献 2 个 π 电子'" :aria-pressed="a.e===2" @click="a.e=2">2</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+                        <button v-for="p in JUDGE_PRESETS" :key="p.name" class="chip" @click="applyPreset(p)">{{ p.name }}</button>
+                    </div>
+                    <div class="q-line" style="margin-top:6px;border-bottom:none">
+                        <span>负电荷带来的 π 电子请计入对应原子的贡献，不要在各原子求和后再加一次；预设仅作形式计数示意。</span>
+                    </div>
+                    <div class="verdict">
+                        <div class="big" :class="{x:!judgeOk}" v-html="judgeText"></div>
+                        <div class="why" v-html="judgeWhy"></div>
+                    </div>
+                </div>
+
+                <!-- 主操作始终显示：先选讲解方式，再播放或拖动成键进度。 -->
+                <div class="control-panel">
+                    <div class="cp-row top-control-row primary-row">
+                        <div class="seg">
+                            <button :class="{on:mode==='auto'}" :aria-pressed="mode==='auto'" @click="setMode('auto')">自动播放</button>
+                            <button :class="{on:mode==='step'}" :aria-pressed="mode==='step'" @click="setMode('step')">分步讲解</button>
+                        </div>
+                        <button class="pbtn primary" @click="togglePlay" :title="playing?'暂停':'播放'"
+                                :aria-label="playing?'暂停':'播放'">{{ playing?'❚❚':'▶' }}</button>
+                        <button class="pbtn" @click="resetAll" title="重置" aria-label="重置">↺</button>
+                        <div class="range-control">
+                            <span class="cp-lab">成键进度</span>
+                            <div class="slider-wrap compact-slider">
+                                <input type="range" min="0" max="1" step="0.001" v-model.number="progress" aria-label="成键进度">
+                                <span class="val">{{ progressPct }}%</span>
+                            </div>
+                        </div>
+                        <div class="seg step-actions" v-if="mode==='step'">
+                            <button @click="stepPrev" :disabled="stepIndex===0">‹ 上一步</button>
+                            <button @click="stepNext" :disabled="stepIndex===cur.steps.length-1">下一步 ›</button>
+                        </div>
+                        <button class="chip details-button" :class="{on:panelOpen}" @click="panelOpen=!panelOpen"
+                                :aria-expanded="panelOpen" aria-controls="control-extra">{{ panelOpen ? '收起详细设置 ▴' : '详细设置 ▾' }}</button>
+                    </div>
+
+                    <div class="cp-row wide-row selector-row" v-if="cur.threeState">
+                        <span class="cp-lab">三态</span>
+                        <div class="seg">
+                            <button :class="{on:view3==='single'}" :aria-pressed="view3==='single'" @click="setView3('single')">单个 p 轨道</button>
+                            <button :class="{on:view3==='overlap'}" :aria-pressed="view3==='overlap'" @click="setView3('overlap')">重叠过程</button>
+                            <button :class="{on:view3==='deloc'}" :aria-pressed="view3==='deloc'" @click="setView3('deloc')">离域电子云</button>
+                        </div>
+                    </div>
+
+                    <!-- 本模块的对比按钮是教学主线，不能被“详细设置”隐藏。 -->
+                    <div class="cp-row wide-row" v-if="cur.phaseSwitch">
+                        <span class="cp-lab">相位</span>
+                        <div class="seg">
+                            <button :class="{on:phaseMode==='same'}" :aria-pressed="phaseMode==='same'" @click="phaseMode='same'">同相位</button>
+                            <button :class="{on:phaseMode==='alt'}" :aria-pressed="phaseMode==='alt'" @click="phaseMode='alt'">交替相位</button>
+                        </div>
+                        <span style="font-size:11.5px;color:var(--ink-faint)">
+                            {{ phaseMode==='same' ? '相邻 p 轨道同相 → 核间电子云叠加增强' : '相邻 p 轨道反相 → 核间出现节面，电子云被切断' }}
+                        </span>
+                    </div>
+
+                    <div class="cp-row wide-row" v-if="cur.modelSwitch">
+                        <span class="cp-lab">模型</span>
+                        <div class="seg">
+                            <button :class="{on:modelMode==='wrong'}" :aria-pressed="modelMode==='wrong'" @click="modelMode='wrong'">假设错误·三对固定 π 键</button>
+                            <button :class="{on:modelMode==='right'}" :aria-pressed="modelMode==='right'" @click="modelMode='right'">正确模型·整体离域</button>
+                        </div>
+                    </div>
+                    <div class="cp-row wide-row model-readout" :class="{actual:modelMode==='right'}" v-if="cur.modelSwitch" aria-live="polite">
+                        <template v-if="modelMode==='wrong'">
+                            <strong>假设模型：三团 π 云彼此断开</strong>
+                            <span>若固定单双键交替，应出现两类 C–C 键；这不是苯的实测结构。</span>
+                        </template>
+                        <template v-else>
+                            <strong>真实苯：环状 π 云连续</strong>
+                            <span>六个 C–C 键等同，实测键长均约 139 pm。</span>
+                        </template>
+                        <small>云团断开是帮助辨别错误想法的示意处理，不是计算得到的另一种苯。</small>
+                    </div>
+
+                    <!-- 视角、物种、速度、间距和九项显示开关保留原功能，按需展开。 -->
+                    <div class="cp-extra" id="control-extra" v-show="panelOpen">
+                        <div class="cp-row wide-row">
+                            <span class="cp-lab">速度</span>
+                            <div class="seg">
+                                <button v-for="s in speeds" :key="s" :class="{on:speed===s}" :aria-pressed="speed===s" @click="speed=s">{{ s }}×</button>
+                            </div>
+                            <div class="range-control">
+                                <span class="cp-lab">原子间距</span>
+                                <div class="slider-wrap compact-slider">
+                                    <input type="range" min="0.55" max="1.45" step="0.01" v-model.number="distScale" aria-label="原子间距">
+                                    <span class="val">{{ distPct }}%</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="cp-row selector-row">
+                            <span class="cp-lab">视角</span>
+                            <div class="seg">
+                                <button v-for="(v,k) in cur.viewPresets" :key="k"
+                                        :class="{on:viewKey===k}" :aria-pressed="viewKey===k" @click="setView(k)">{{ v.label }}</button>
+                            </div>
+                        </div>
+                        <div class="cp-row selector-row" v-if="cur.switches">
+                            <span class="cp-lab">物种</span>
+                            <div class="seg">
+                                <button v-for="s in cur.switches" :key="s.id"
+                                        :class="{on:specimenId===s.id}" :aria-pressed="specimenId===s.id" @click="setSpecimen(s.id)">{{ s.name }}</button>
+                            </div>
+                        </div>
+                        <div class="cp-row wide-row">
+                            <span class="cp-lab">显示</span>
+                            <button v-for="t in toggleList" :key="t.k" class="sw" :class="{on:toggles[t.k]}"
+                                    @click="toggles[t.k]=!toggles[t.k]" :aria-pressed="toggles[t.k]"><i></i>{{ t.label }}</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模块 8：误区对照（主区下半部分，内容高，自己内部滚动） -->
+            <div class="card panel-scroll" v-if="currentId==='myths'">
+                <div class="scroll-hint">↓ 向上滑动，查看其余误区和模型对照</div>
+                <h3>六条常见误区 · 先自己判断，再点开看辨析</h3>
+                <div class="myth" v-for="(m,i) in MYTHS" :key="i">
+                    <div class="say"><em>说法 {{ i+1 }}：</em>{{ m.claim }}</div>
+                    <div class="ask">
+                        <span style="font-size:12px;color:var(--ink-faint)">你认为对吗？</span>
+                        <div class="yn">
+                            <button :class="{on:m.pick==='T'}" :aria-label="'说法 '+(i+1)+'：对'" :aria-pressed="m.pick==='T'" @click="m.pick='T'">对</button>
+                            <button :class="{on:m.pick==='F'}" :aria-label="'说法 '+(i+1)+'：错'" :aria-pressed="m.pick==='F'" @click="m.pick='F'">错</button>
+                        </div>
+                        <button class="chip" v-if="m.pick" @click="m.open=!m.open">{{ m.open ? '收起' : '看辨析' }}</button>
+                    </div>
+                    <div class="reveal" v-if="m.open">
+                        <div class="fix">正确说法：{{ m.fix }}</div>
+                        <div class="why">{{ m.why }}</div>
+                    </div>
+                </div>
+                <!-- 错误模型 / 正确模型并排对比（示意小图） -->
+                <div class="my-cmp">
+                    <div class="box bad2">
+                        <div class="t">✗ 假设错误：把一个凯库勒式当固定的三个局域 π 键</div>
+                        <div v-html="SVG_WRONG"></div>
+                    </div>
+                    <div class="box good2">
+                        <div class="t">✓ 真实苯：六个 p 整体离域，六键等长</div>
+                        <div v-html="SVG_RIGHT"></div>
+                    </div>
+                </div>
+                <p style="margin-top:9px;font-size:12px;color:var(--ink-faint)">
+                    凯库勒式仍可用于共振表示；错的是把其中一式当作苯真实不变的单双键排列。
+                </p>
+            </div>
+
+            <!-- 模块 9：互动自测 -->
+            <div class="quiz" v-if="currentId==='quiz'">
+                <div class="scroll-hint">↓ 向上滑动，查看后续题目与本页小结</div>
+                <div class="qhead">
+                    <div class="seg">
+                        <button v-for="(t,ti) in QUIZ_TYPES" :key="ti" :class="{on:quizType===ti}" @click="quizType=ti">
+                            {{ t.name }}
+                        </button>
+                    </div>
+                    <div class="score">得分 {{ quizScore }} / {{ quizAnsweredTotal }}　已完成 {{ quizDoneCount }} / {{ quizFiltered.length }}</div>
+                </div>
+                <div class="qbar"><i :style="{width:(quizDoneCount/quizFiltered.length*100)+'%'}"></i></div>
+
+                <div class="qcard" v-for="(q,qi) in quizFiltered" :key="q.id">
+                    <div class="qno">第 {{ qi+1 }} 题 · {{ typeName(q.type) }}</div>
+                    <div class="qt" v-html="q.q"></div>
+
+                    <!-- 图示识别题 -->
+                    <div class="diagram" v-if="q.type==='diagram'">
+                        <div class="d" v-for="(d,di) in q.diagrams" :key="di">
+                            <div v-html="d.svg"></div>
+                            <div class="cap">{{ d.cap }}</div>
+                        </div>
+                    </div>
+
+                    <!-- 配对题 -->
+                    <div class="match" v-if="q.type==='match'">
+                        <div class="col">
+                            <h5>物种</h5>
+                            <button type="button" class="mchip" v-for="s in q.left" :key="s.k"
+                                 :class="{sel:q.selLeft===s.k,done:q.paired && q.paired[s.k]}"
+                                 :aria-pressed="q.selLeft===s.k"
+                                 :disabled="q.done || !!(q.paired && q.paired[s.k])"
+                                 @click="pickLeft(q,s.k)">{{ s.t }}</button>
+                        </div>
+                        <div class="col">
+                            <h5>离域 π 键</h5>
+                            <button type="button" class="mchip" v-for="p in q.right" :key="p.k"
+                                 :class="{sel:q.selRight===p.k,done:q.paired && Object.values(q.paired).includes(p.k)}"
+                                 :disabled="q.done || !q.selLeft || Object.values(q.paired).includes(p.k)"
+                                 @click="pickRight(q,p.k)" v-html="p.t"></button>
+                        </div>
+                    </div>
+
+                    <!-- 选择 / 判断题 -->
+                    <template v-if="q.type!=='match'">
+                        <button v-for="(o,oi) in q.options" :key="oi" class="opt"
+                                :class="optClass(q,oi)" :disabled="q.done"
+                                @click="answer(q,oi)">
+                            <span class="k">{{ 'ABCD'[oi] }}</span><span v-html="o"></span>
+                        </button>
+                    </template>
+
+                    <div class="fb" v-if="q.done">
+                        <div class="res" :class="q.correct?'y':'n'">{{ q.correct ? '✓ 正确' : '✗ 再想想' }}</div>
+                        <div class="txt" v-html="q.explain"></div>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top:8px">
+                    <h3>本页小结</h3>
+                    <p v-html="cur.summary"></p>
+                    <div style="display:flex;gap:8px;margin-top:10px">
+                        <button class="chip" @click="resetQuiz">重做本页</button>
+                        <button class="chip" @click="go('intro')">回到开头</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script>
+/* =====================================================================
+   以下为本页全部业务代码（含 Three.js 渲染引擎与 Vue 界面层）
+   所有注释用中文，方便教师自己改参数。
+   ===================================================================== */
+/* =====================================================================
+   A. 渲染调参（全部可调参数集中在这里，禁止魔法数字散落各处）
+      教师想改电子云观感，只需要动这个对象。
+   ===================================================================== */
+const RENDER_TUNING = {
+    defaultDensity: 2.5,     // 整体亮度（越大越亮越实）
+    defaultSharpness: 1.0,   // p 轨道胖瘦（越大越细长）
+    piBrightness: 2.0,       // 独立 p 轨道比离域叠加后的云更暗，需要单独补偿亮度
+    localPointSizeGain: 40,  // 只放大独立轨道的光点，离域云仍保留原来的细腻程度
+    coreFalloff: 15.0,       // 核心层边缘衰减（越大越"实"）
+    coreAlpha: 0.085,        // ★ 核心层【每个粒子】的透明度
+    haloPointScale: 2.0,     // 光晕层点放大倍率
+    haloAlpha: 0.022,        // 光晕层透明度（必须很低，只负责氛围）
+    haloFalloff: 4.0,        // 光晕层边缘衰减（越小越糊）
+    pointSizeGain: 30.0,     // 密度 → 点大小的放大系数
+    pointSizeMax: 16.0,      // 点大小上限（像素）
+    depthRange: 9.0,         // 前后相差多少算"最深"
+    fogMin: 0.45,            // 最远处保留的透明度（改成 1.0 等于关闭雾化）
+    lightThemeAlpha: 0.34    // 浅色主题整体透明度倍率
+};
+/* 关于 coreAlpha / haloAlpha 为什么必须这么低：
+   电子云用的是【加法混合】的粒子云，一个像素上会叠十几到几十个粒子。
+   如果每个粒子的透明度接近 1，叠加后所有颜色都会被推到纯白，
+   红/蓝相位色就被冲掉了（实测约 93% 的可见像素会饱和成近白色）。
+   所以单点透明度要压到 0.1 以下，让"密的地方自然更亮、疏的地方自然更暗"。 */
+
+// 点阵密度：高/低画质两档（性能开销与 gridSize³ 成正比）
+const GRID_SIZE = { high: 90, low: 56 };
+
+// 动画播放步长（每帧推进多少进度）：0.005 大约 3~4 秒走完全程
+const STEP_PER_FRAME = 0.005;
+
+// 相位颜色（拓展内容：波函数正负号）
+const colorPos = 0xff5f72;   // 正相位 → 红
+const colorNeg = 0x4d8cff;   // 负相位 → 蓝
+
+// 元素外观：球半径(r) + 轨道大小比例(orb) + 颜色
+// orb 是"轨道尺度"：径向函数 exp(-rLLen/orb)，lobe 大约延伸到 2.5~3 个单位，
+// 与 2.5 单位的键长匹配，相邻 p 轨道才会在核间上方/下方自然重叠。
+const ELEM = {
+    C: { r: 0.30, orb: 1.05, color: 0x9fb3d9, name: '碳' },
+    N: { r: 0.32, orb: 1.00, color: 0x6fa8ff, name: '氮' },
+    O: { r: 0.30, orb: 0.96, color: 0xff7a7a, name: '氧' },
+    S: { r: 0.38, orb: 1.18, color: 0xffd166, name: '硫' },
+    H: { r: 0.17, orb: 0.60, color: 0xdbe6ff, name: '氢' }
+};
+
+// 六阶段叙事骨架：所有分子的动画都按这六个阶段展开
+const PHASES = [
+    { key: 'isolated', name: '① 独立原子', range: [0.00, 0.15] },
+    { key: 'approach', name: '② 骨架靠拢', range: [0.15, 0.35] },
+    { key: 'parallel', name: '③ 平行排列', range: [0.35, 0.55] },
+    { key: 'overlap', name: '④ 侧面重叠', range: [0.55, 0.80] },
+    { key: 'delocal', name: '⑤ 离域成型', range: [0.80, 1.00] }
+];
+// 供教师改文案时对照（与 PHASES 一致）
+const phaseRanges = Object.fromEntries(PHASES.map(p => [p.key, p.range]));
+
+/* =====================================================================
+   B. 平面几何小工具（分子都放在 xy 平面里，p 轨道一律沿 z 方向）
+   ===================================================================== */
+const POS_COL = '#ff5f72', NEG_COL = '#4d8cff';
+
+function d2(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], (a[2] || 0) - (b[2] || 0)); }
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], 0]; }
+function add2(a, b) { return [a[0] + b[0], a[1] + b[1], 0]; }
+function mul2(a, k) { return [a[0] * k, a[1] * k, 0]; }
+function norm2(a) { const l = Math.hypot(a[0], a[1]) || 1; return [a[0] / l, a[1] / l, 0]; }
+// 平面内绕原点旋转（角度制）
+function rot2(v, deg) {
+    const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+    return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, 0];
+}
+// 正多边形顶点
+function ringPts(cx, cy, R, n, startDeg) {
+    const out = [];
+    for (let i = 0; i < n; i++) {
+        const a = (startDeg + i * 360 / n) * Math.PI / 180;
+        out.push([cx + R * Math.cos(a), cy + R * Math.sin(a), 0]);
+    }
+    return out;
+}
+// 让整组坐标的几何中心回到原点，方便相机取景
+function centerPts(list) {
+    const cx = list.reduce((s, p) => s + p[0], 0) / list.length;
+    const cy = list.reduce((s, p) => s + p[1], 0) / list.length;
+    return list.map(p => [p[0] - cx, p[1] - cy, 0]);
+}
+// 求 sp² 碳上氢的方向：1 个氢 → 取两个重原子方向的合成反向；2 个氢 → 绕键方向转 ±120°
+function hDirs(center, nbrs, nH) {
+    if (nH === 2) {
+        const u = norm2(sub(nbrs[0], center));
+        return [rot2(u, 120), rot2(u, -120)];
+    }
+    const s = add2(norm2(sub(nbrs[0], center)), norm2(sub(nbrs[1], center)));
+    return [norm2(mul2(s, -1))];
+}
+// 键表必须显式给出：距离只能用于核验，不能拿来猜哪两个原子成键。
+function mkFrame(piList, extraList, piBonds, hydrogenParents) {
+    const frame = piList.map(p => ({ el: p.el, pos: p.pos }))
+        .concat((extraList || []).map(p => ({ el: p.el, pos: p.pos })));
+    const bonds = piBonds.map(([i, j, order = 1]) => [i, j, order]);
+    (hydrogenParents || []).forEach((parent, i) => bonds.push([parent, piList.length + i, 1]));
+    return { frame, bonds };
+}
+function chainBonds(n, order = 1) { return Array.from({ length: n - 1 }, (_, i) => [i, i + 1, order]); }
+function ringBonds(n, order = 1) { return Array.from({ length: n }, (_, i) => [i, (i + 1) % n, order]); }
+// π 相邻关系与 σ 骨架共享同一张键表，避免节面和骨架出现两套相互矛盾的连接。
+function piAdjacent(bonds, n) { return bonds.filter(b => b[0] < n && b[1] < n).map(b => b.slice(0, 2)); }
+
+/* =====================================================================
+   C. 每个模块的专属机位（不同模块分子尺寸不同，必须各自设定）
+      main  斜侧俯视：既能看到骨架、又能看到上下两片离域云（大 π 键的主视角）
+      top   垂直俯视：正对分子平面，用来判断"六个键是否完全等同"
+      front 沿平面正视：p 轨道被压成一条线，看清"云在平面上下"
+      side  侧视：换个角度观察两侧重叠
+   ===================================================================== */
+function mkViews(k) {
+    // k = {main, top, front, side} 距离倍率，各物种自己给
+    // main 之所以取 [0,-1,0.52]（约 63° 斜俯视）而不是 45°：
+    // 45° 时上下两片电子云在屏幕上的投影会叠在一起，看起来只有"一圈云"；
+    // 63° 时骨架仍然看得清，而上下两片云各自分开、能明显看出"平面上下各一片"。
+    return {
+        main: { label: '斜侧俯视', dir: [0, -1, 0.52], dist: k.main },
+        top: { label: '垂直俯视', dir: [0, -0.001, 1], dist: k.top },
+        front: { label: '沿平面正视', dir: [0, -1, 0.06], dist: k.front },
+        side: { label: '侧视', dir: [1, -0.20, 0.28], dist: k.side }
+    };
+}
+
+/* =====================================================================
+   D. 物种库（SPECIMENS）
+      约定：
+      · pi     —— 参与大 π 键的原子（每个提供一个垂直于分子平面的 p 轨道），数量必须 ≤16
+      · extra  —— 只画 σ 骨架、不参与 π 的原子（氢等）
+      · atomCoeffRule 'same' 同相位 / 'alt' 相邻交替相位
+      · channelRule  'one' 全部填同一通道（真离域）/ 'pairs' 两两成键（错误模型：小 π 键相加）
+   ===================================================================== */
+const SPECIMENS = {};
+
+/* ---- 三个/两个平行 p 轨道（入门模型） ---- */
+(function () {
+    // 以平面烯丙基负离子 C3H5- 代替缺氢的抽象三碳链，两个端碳各连两个 H。
+    const pi = [{ el: 'C', pos: [-2.35, 0, 0] }, { el: 'C', pos: [0, 0, 0] },
+        { el: 'C', pos: [1.175, 2.035, 0] }];
+    const hs = [];
+    [0, 1, 2].forEach(i => {
+        const nbrs = (i === 0 ? [1] : i === 1 ? [0, 2] : [1]).map(j => pi[j].pos);
+        hDirs(pi[i].pos, nbrs, nbrs.length === 1 ? 2 : 1)
+            .forEach(u => hs.push({ el: 'H', pos: add2(pi[i].pos, mul2(u, 1.96)) }));
+    });
+    const bonds = chainBonds(3, 1.5);
+    const f = mkFrame(pi, hs, bonds, [0, 0, 1, 2, 2]);
+    SPECIMENS.chain3 = {
+        id: 'chain3', name: '烯丙基负离子（3 个 p）', formula: 'C₃H₅⁻',
+        pi: pi, frame: f.frame, bonds: f.bonds,
+        adj: piAdjacent(f.bonds, pi.length),
+        piNotation: { n: 3, m: 4 },
+        range: 6.2, trim: 3.0, orb: 2.0,
+        viewPresets: mkViews({ main: 1.62, top: 1.5, front: 1.5, side: 1.62 }),
+        note: '平面烯丙基负离子：三个 sp² 碳各有垂直于平面的 p 轨道，共 4 个 π 电子。'
+    };
+})();
+(function () {
+    const pi = [{ el: 'C', pos: [-1.35, 0, 0] }, { el: 'C', pos: [1.35, 0, 0] }];
+    const hs = pi.flatMap(a => hDirs(a.pos, [pi.find(b => b !== a).pos], 2)
+        .map(u => ({ el: 'H', pos: add2(a.pos, mul2(u, 1.96)) })));
+    const f = mkFrame(pi, hs, [[0, 1, 2]], [0, 0, 1, 1]);
+    SPECIMENS.chain2 = {
+        id: 'chain2', name: '乙烯（2 个 p）', formula: 'C₂H₄',
+        pi: pi, frame: f.frame, bonds: f.bonds,
+        adj: piAdjacent(f.bonds, pi.length),
+        piNotation: { n: 2, m: 2 },
+        range: 5.2, trim: 2.8, orb: 2.0,
+        viewPresets: mkViews({ main: 1.75, top: 1.6, front: 1.6, side: 1.75 }),
+        note: '只有 2 个原子参与 —— 这属于普通 π 键，不是大 π 键。'
+    };
+})();
+
+/* ---- 苯 Π₆⁶（主案例） ---- */
+(function () {
+    const R = 2.5;
+    const cs = ringPts(0, 0, R, 6, 0);
+    const pi = cs.map(p => ({ el: 'C', pos: p }));
+    // 苯环 C–H 约 109 pm：按 139 pm ↔ 2.5 单位的比例折算 = 1.96 单位
+    const hs = cs.map((p, i) => ({ el: 'H', pos: add2(p, mul2(norm2(p), 1.96)) }));
+    const f = mkFrame(pi, hs, ringBonds(6, 1.5), cs.map((_, i) => i));
+    SPECIMENS.benzene = {
+        id: 'benzene', name: '苯', formula: 'C₆H₆',
+        pi: pi, frame: f.frame, bonds: f.bonds,
+        adj: piAdjacent(f.bonds, pi.length),
+        piNotation: { n: 6, m: 6 },
+        range: 6.2, trim: 3.0, orb: 2.0,
+        viewPresets: mkViews({ main: 1.62, top: 1.45, front: 1.5, side: 1.62 }),
+        bondNote: 'C–C 139 pm × 6（完全相同）',
+        note: '六个碳各提供一个垂直于环平面的 p 轨道，六个 p 轨道整体侧面重叠。'
+    };
+})();
+
+/* ---- 1,3-丁二烯 Π₄⁴ ---- */
+(function () {
+    // 按比例折算：1 pm ≈ 0.0180 单位（苯 139 pm ↔ 2.5 单位）
+    const c2 = [-1.315, 0, 0], c3 = [1.315, 0, 0];          // C2–C3 约 146 pm
+    const dC1 = rot2(norm2(sub(c2, c3)), -60);               // C1 必须朝左上，不能折回 C3 附近
+    const p1 = add2(c2, mul2(dC1, 2.41));                    // C=C 约 134 pm
+    const dC4 = rot2(norm2(sub(c3, c2)), -60);               // C4 朝右下，形成反式平面锯齿
+    const p4 = add2(c3, mul2(dC4, 2.41));
+    const pi = [{ el: 'C', pos: p1 }, { el: 'C', pos: c2 }, { el: 'C', pos: c3 }, { el: 'C', pos: p4 }];
+    // 每个碳补氢：C1、C4 各 2 个；C2、C3 各 1 个
+    const hs = [];
+    const parents = [];
+    [0, 1, 2, 3].forEach(i => {
+        const nbrs = [0, 1, 2, 3].filter(j => j !== i && d2(pi[j].pos, pi[i].pos) <= 2.9).map(j => pi[j].pos);
+        const nH = nbrs.length === 1 ? 2 : 1;
+        hDirs(pi[i].pos, nbrs.length >= 2 ? nbrs : [nbrs[0], nbrs[0]], nH).forEach(u => {
+            hs.push({ el: 'H', pos: add2(pi[i].pos, mul2(u, 1.96)) });
+            parents.push(i);
+        });
+    });
+    const f = mkFrame(pi, hs, [[0, 1, 2], [1, 2, 1], [2, 3, 2]], parents);
+    SPECIMENS.butadiene = {
+        id: 'butadiene', name: '1,3-丁二烯', formula: 'CH₂=CH–CH=CH₂',
+        pi: pi, frame: f.frame, bonds: f.bonds,
+        adj: piAdjacent(f.bonds, pi.length),
+        piNotation: { n: 4, m: 4 },
+        range: 7.4, trim: 3.0, orb: 2.0,
+        viewPresets: mkViews({ main: 1.60, top: 1.30, front: 1.42, side: 1.60 }),
+        bondNote: 'C2–C3 约 146 pm（比单键 154 pm 短）',
+        note: '四个碳共平面，四个 p 轨道连成一条离域大 π 键；中间的 C2–C3 因此被"拉短"。'
+    };
+})();
+
+/* ---- 平面型无机离子：CO₃²⁻ / NO₃⁻ Π₄⁶ ---- */
+(function () {
+    const mk = (id, name, centerEl, R) => {
+        const os = ringPts(0, 0, R, 3, 90);
+        const pi = [{ el: centerEl, pos: [0, 0, 0] }].concat(os.map(p => ({ el: 'O', pos: p })));
+        const f = mkFrame(pi, [], [[0, 1, 4 / 3], [0, 2, 4 / 3], [0, 3, 4 / 3]], []);
+        return {
+            id: id, name: name, formula: name,
+            pi: pi, frame: f.frame, bonds: f.bonds,
+            adj: piAdjacent(f.bonds, pi.length),
+            piNotation: { n: 4, m: 6 },
+            range: 6.0, trim: 3.0, orb: 1.95,
+            viewPresets: mkViews({ main: 1.63, top: 1.5, front: 1.5, side: 1.63 }),
+            bondNote: name === 'CO₃²⁻' ? '三个 C–O 均约 131 pm（完全相同）' : '三个 N–O 均约 124 pm（完全相同）',
+            note: '平面三角形，四个原子各出一个 p 轨道；共 6 个 π 电子，写成 Π₄⁶。'
+        };
+    };
+    // C–O 约 131 pm → 2.36 单位；N–O 约 124 pm → 2.23 单位
+    SPECIMENS.carbonate = mk('carbonate', 'CO₃²⁻', 'C', 2.36);
+    SPECIMENS.nitrate = mk('nitrate', 'NO₃⁻', 'N', 2.23);
+})();
+
+/* ---- 三中心四电子键：O₃ / SO₂ Π₃⁴ ---- */
+(function () {
+    const mk = (id, name, centerEl, R, halfAngle) => {
+        const t1 = [R * Math.cos(halfAngle * Math.PI / 180), R * Math.sin(halfAngle * Math.PI / 180), 0];
+        const t2 = [-t1[0], t1[1], 0];
+        const pi = [{ el: centerEl, pos: [0, 0, 0] }, { el: 'O', pos: t1 }, { el: 'O', pos: t2 }];
+        const f = mkFrame(pi, [], [[0, 1, 1.5], [0, 2, 1.5]], []);
+        return {
+            id: id, name: name, formula: name,
+            pi: pi, frame: f.frame, bonds: f.bonds,
+            adj: piAdjacent(f.bonds, pi.length),
+            piNotation: { n: 3, m: 4 },
+            range: 5.6, trim: 2.9, orb: 1.95,
+            viewPresets: mkViews({ main: 1.70, top: 1.55, front: 1.55, side: 1.70 }),
+            bondNote: name === 'O₃' ? '两个 O–O 均约 128 pm' : '两个 S–O 均约 143 pm',
+            note: id === 'ozone'
+                ? 'O₃ 按中性原子的轨道贡献记账可写中心氧 2 个、两端各 1 个，共 4 个 → Π₃⁴；若按单个路易斯共振式形式计数，则是中心 1 个、两端 2 个和 1 个，实际两端等价。'
+                : 'SO₂ 可用三中心四电子 π 体系作简化示意（Π₃⁴）；硫的真实成键与电荷分布不能仅由这一张轨道图确定。'
+        };
+    };
+    SPECIMENS.ozone = mk('ozone', 'O₃', 'O', 2.30, 31.5);   // 180° - 2×31.5° = 117°
+    SPECIMENS.so2 = mk('so2', 'SO₂', 'S', 2.57, 30.5);      // 180° - 2×30.5° = 119°
+})();
+
+/* ---- 竞赛拓展：五元/六元杂环、环戊二烯负离子 ---- */
+(function () {
+    // 六元环含一个氮：吡啶（N 的孤对在 sp² 上，不参与大 π 键）
+    const hex = ringPts(0, 0, 2.5, 6, 90);
+    // 吡啶的 C-N 约 134 pm，略短于其他环内 C-C（约 139 pm）。
+    hex[0] = mul2(hex[0], 2.32 / 2.5);
+    (function () {
+        const pi = hex.map((p, i) => ({ el: i === 0 ? 'N' : 'C', pos: p }));
+        const hs = pi.filter(a => a.el === 'C').map(a => ({ el: 'H', pos: add2(a.pos, mul2(norm2(a.pos), 1.96)) }));
+        const f = mkFrame(pi, hs, ringBonds(6),
+            pi.map((a, i) => a.el === 'C' ? i : -1).filter(i => i >= 0));
+        SPECIMENS.pyridine = {
+            id: 'pyridine', name: '吡啶', formula: 'C₅H₅N',
+            pi: pi, frame: f.frame, bonds: f.bonds, adj: piAdjacent(f.bonds, pi.length),
+            piNotation: { n: 6, m: 6 }, range: 6.3, trim: 3.0, orb: 2.0,
+            viewPresets: mkViews({ main: 1.62, top: 1.45, front: 1.5, side: 1.62 }),
+            bondNote: '环上 C–N 约 134 pm',
+            note: '吡啶 N 的一对孤对电子待在 sp² 杂化轨道上（在环平面内），不参与大 π 键；N 只提供 p 轨道上的 1 个电子 → Π₆⁶。'
+        };
+    })();
+    // 五元环含一个杂原子：吡咯（N 孤对在 p 上，参与）/ 呋喃（O 同理）
+    const pent = ringPts(0, 0, 2.13, 5, 90);
+    const mkPenta = (id, name, hetEl, hetH) => {
+        // 五元环内角受环约束，不硬套理想 120°；杂原子相邻的两根键略短。
+        const sites = pent.map((p, i) => i === 0 ? mul2(p, hetEl === 'O' ? 2.03 / 2.13 : 2.08 / 2.13) : p);
+        const pi = sites.map((p, i) => ({ el: i === 0 ? hetEl : 'C', pos: p }));
+        const hs = [];
+        const parents = [];
+        pi.forEach((a, i) => {
+            if (a.el === 'C' || (a.el === hetEl && hetH)) {
+                hs.push({ el: 'H', pos: add2(a.pos, mul2(norm2(a.pos), a.el === 'C' ? 1.95 : 1.80)) });
+                parents.push(i);
+            }
+        });
+        const f = mkFrame(pi, hs, ringBonds(5), parents);
+        return {
+            id: id, name: name, formula: name, pi: pi, frame: f.frame, bonds: f.bonds,
+            adj: piAdjacent(f.bonds, pi.length), piNotation: { n: 5, m: 6 },
+            range: 5.9, trim: 2.9, orb: 1.98,
+            viewPresets: mkViews({ main: 1.65, top: 1.5, front: 1.52, side: 1.65 }),
+            bondNote: hetEl === 'O' ? '环上 C–O 约 136 pm（近似）' : '环上 C–N 约 137 pm（近似）',
+            note: name + '的' + hetEl + '只形成 2 个 σ 键，剩下的孤对电子处在垂直于环平面的 p 轨道上，' +
+                '所以它提供 2 个 π 电子 → Π₅⁶。这正是与吡啶最关键的区别。'
+        };
+    };
+    SPECIMENS.pyrrole = mkPenta('pyrrole', '吡咯', 'N', true);
+    SPECIMENS.furan = mkPenta('furan', '呋喃', 'O', false);
+    // 环戊二烯负离子：5 个 C 共平面，带负电的碳把一对孤对放在 p 轨道上
+    (function () {
+        const cs = ringPts(0, 0, 2.13, 5, 90);
+        const pi = cs.map(p => ({ el: 'C', pos: p }));
+        const hs = cs.map(p => ({ el: 'H', pos: add2(p, mul2(norm2(p), 1.95)) }));
+        const f = mkFrame(pi, hs, ringBonds(5), cs.map((_, i) => i));
+        SPECIMENS.cyclopentadienyl = {
+            id: 'cyclopentadienyl', name: '环戊二烯负离子', formula: 'C₅H₅⁻',
+            pi: pi, frame: f.frame, bonds: f.bonds, adj: piAdjacent(f.bonds, pi.length),
+            piNotation: { n: 5, m: 6 }, range: 5.9, trim: 2.9, orb: 1.98,
+            viewPresets: mkViews({ main: 1.65, top: 1.5, front: 1.52, side: 1.65 }),
+            bondNote: '五个 C–C 键长趋于平均',
+            note: '5 个碳共平面：带负电的碳提供一对处在 p 轨道上的孤对电子，其余 4 个碳各提供 1 个，共 6 个 π 电子 → Π₅⁶。'
+        };
+    })();
+})();
+
+/* ---- 石墨：无数个平行 p 轨道连成一片"π 电子海" ---- */
+(function () {
+    const a = 2.5;                                    // C–C 键长（对应约 142 pm）
+    const a1 = [1.5 * a, -0.866 * a, 0], a2 = [1.5 * a, 0.866 * a, 0];
+    const delta = [a, 0, 0];                          // 两个子晶格之间的位移
+    const pts = [];
+    for (let i = 0; i < 3; i++) {
+        for (let k = 0; k < 2; k++) {
+            const A = add2(mul2(a1, i), mul2(a2, k));
+            pts.push(A);
+            pts.push(add2(A, delta));
+        }
+    }
+    const pi = centerPts(pts).map(p => ({ el: 'C', pos: p }));   // 12 个碳，全部参与大 π 键
+    // 每个 A 点只连本晶胞和左侧两个相邻晶胞的 B 点；边缘少一根键代表晶格继续延伸。
+    const latticeBonds = [];
+    for (let i = 0; i < 3; i++) for (let k = 0; k < 2; k++) {
+        const at = (x, y) => 2 * (x * 2 + y);
+        latticeBonds.push([at(i, k), at(i, k) + 1, 1]);
+        if (i > 0) latticeBonds.push([at(i, k), at(i - 1, k) + 1, 1]);
+        if (k > 0) latticeBonds.push([at(i, k), at(i, k - 1) + 1, 1]);
+    }
+    const f = mkFrame(pi, [], latticeBonds, []);
+    SPECIMENS.graphite = {
+        id: 'graphite', name: '石墨（层内）', formula: '石墨层',
+        pi: pi, frame: f.frame, bonds: f.bonds, adj: piAdjacent(f.bonds, pi.length),
+        piNotation: null, range: 9.2, trim: 2.8, orb: 2.0,
+        localBrightness: 1.65, // 石墨独立轨道再稍微提亮；萘的参数保持不变
+        localDensityBoost: 1.45, // 让更多轨道边缘光点通过可见性阈值
+        localPointSizeBoost: 1.18, // 远景时适度增大光点覆盖面积
+        localGridSize: { high: 100, low: 62 }, // 仅给石墨的独立轨道加密采样，不影响离域云
+        viewPresets: mkViews({ main: 1.30, top: 1.15, front: 1.20, side: 1.30 }),
+        bondNote: '层内 C–C 约 142 pm',
+        note: '图中仅截取石墨层的有限晶格片段：边缘未画出的键在真实晶体中周期延续；层内为连续 π 能带，层间主要靠色散力结合。'
+    };
+})();
+
+/* ---- 萘 Π₁₀¹⁰：演示"原子槽位"与性能上限 ---- */
+(function () {
+    const R = 2.5;
+    const c1 = ringPts(0, 0, R, 6, 0);
+    // 第二个六元环：中心沿 30° 方向移动 √3R，两个环正好共用一条边
+    const c2 = ringPts(1.732 * R * Math.cos(Math.PI / 6), 1.732 * R * Math.sin(Math.PI / 6), R, 6, 0);
+    const all = c1.concat(c2.filter(p => Math.min(...c1.map(q => d2(p, q))) > 0.2));
+    const pi = centerPts(all).map(p => ({ el: 'C', pos: p }));
+    // 两个六元环各给出六条边，共用边只保留一次。
+    const findVertex = p => {
+        const index = all.findIndex(q => d2(p, q) < 0.01);
+        if (index < 0) throw new Error('萘的共用顶点未匹配');
+        return index;
+    };
+    const edges = new Map();
+    [c1, c2].forEach(ring => {
+        for (let i = 0; i < 6; i++) {
+            const a = findVertex(ring[i]), b = findVertex(ring[(i + 1) % 6]);
+            edges.set([a, b].sort((x, y) => x - y).join('-'), [a, b, 1]);
+        }
+    });
+    const ringEdges = Array.from(edges.values());
+    // 只在两个碳邻居的环外碳上补 H，按两根 C-C 键的角平分线反向定位。
+    const hs = [];
+    const parents = [];
+    pi.forEach((a, i) => {
+        const neighbors = ringEdges.filter(b => b[0] === i || b[1] === i)
+            .map(b => pi[b[0] === i ? b[1] : b[0]].pos);
+        if (neighbors.length === 2) {
+            hs.push({ el: 'H', pos: add2(a.pos, mul2(hDirs(a.pos, neighbors, 1)[0], 1.96)) });
+            parents.push(i);
+        }
+    });
+    const f = mkFrame(pi, hs, ringEdges, parents);
+    SPECIMENS.naphthalene = {
+        id: 'naphthalene', name: '萘', formula: 'C₁₀H₈',
+        pi: pi, frame: f.frame, bonds: f.bonds, adj: piAdjacent(f.bonds, pi.length),
+        piNotation: { n: 10, m: 10 }, range: 8.6, trim: 3.0, orb: 2.0,
+        localBrightness: 1.45, // 仅调整萘的独立轨道，不提亮已形成的离域云
+        localDensityBoost: 1.45,
+        localPointSizeBoost: 1.18,
+        viewPresets: mkViews({ main: 1.30, top: 1.15, front: 1.22, side: 1.30 }),
+        bondNote: '环上 C–C 约 136~142 pm',
+        note: '10 个碳共平面、10 个 p 轨道整体重叠 → Π₁₀¹⁰。它也是本页"原子槽位"的测试案例：槽位必须够大，否则电子云会被悄悄画错。'
+    };
+})();
+
+/* =====================================================================
+   E. 模块配置（左侧导航 + 信息卡 + 分步讲解文案）
+   ===================================================================== */
+const MODULES = [
+    {
+        id: 'intro', no: '0', title: '大 π 键是什么', specimen: 'chain3', threeState: true,
+        switches: [{ id: 'chain3', name: '3 个 p 轨道' }, { id: 'benzene', name: '苯环 Π₆⁶' }],
+        keys: [
+            '大 π 键是<b>多个原子一起</b>形成的 π 键，电子属于整体，不属于任何两个原子。',
+            '判据三要素：<b>共平面</b> + 每个原子都有<b>垂直于该平面的 p 轨道</b> + 电子数允许整体重叠。',
+            '记号 <b>Π<sub>n</sub><sup>m</sup></b>：n = 参与的原子数（p 轨道数），m = 参与的 π 电子数。'
+        ],
+        summary: '大 π 键 = 多个平行 p 轨道<b>整体侧面重叠</b>成一个多中心键，电子在整个骨架中<b>离域</b>。',
+        pitfall: '不要把它理解成「几个小 π 键加起来」，更不要以为「有双键就有大 π 键」——只有 2 个原子参与的属于普通 π 键。',
+        advancedNote: '用右侧的判定小工具试一试：选一个物种，先自己判断三条判据，再看页面给出的 Πₙᵐ 结果。',
+        steps: [
+            { text: '先看三个<b>孤立的 p 轨道</b>：它们是哑铃形（不是球形），有严格的<b>方向性</b>，彼此还离得远。' },
+            { text: '检查骨架的<b>平面性</b>：sp² 碳保留的 p 轨道从一开始就垂直于同一平面；动画不会让它们从横向强行转正。' },
+            { text: '让它们<b>肩并肩侧面重叠</b>：核间电子云连成一片，形成一条覆盖全部原子的离域大 π 键。' }
+        ]
+    },
+    {
+        id: 'basics', no: '1', title: '从 p 轨道到离域云', specimen: 'chain3', threeState: true,
+        switches: [{ id: 'chain2', name: '2 个 p 轨道' }, { id: 'chain3', name: '3 个 p 轨道' }],
+        keys: [
+            '单个 p 轨道是<b>哑铃形</b>，两头分居核的两侧，方向固定。',
+            '侧面重叠发生在<b>键轴两侧</b>，不是头碰头（头碰头是 σ 键）。',
+            '两个原子之间形成的是普通 π 键；<b>三个及以上</b>才谈得上大 π 键（离域）。'
+        ],
+        summary: '先由沿键轴头碰头重叠的杂化轨道形成 σ 骨架，再由平行的未杂化 p 轨道在键轴两侧重叠形成 π 成分。',
+        pitfall: 'p 轨道不是球！把它画成球、或者让它们方向乱放，就永远看不出为什么必须"共面且平行"。',
+        advancedNote: '把原子间距滑块推到最大再拉回来，观察"重叠程度"如何从几乎没有变成连成一片。',
+        steps: [
+            { text: '① 单个 p 轨道：哑铃形，与核的距离、方向都是固定的。' },
+            { text: '② 侧面重叠：两个平行 p 轨道肩并肩，核间出现明显的电子云叠加。' },
+            { text: '③ 离域：三个及以上的平行 p 轨道连成一条，电子不再属于某两个原子。' }
+        ]
+    },
+    {
+        id: 'benzene', no: '2', title: '苯 Π₆⁶ ★主案例', star: true, specimen: 'benzene', threeState: true,
+        switches: [{ id: 'benzene', name: '苯环' }],
+        keys: [
+            '六个碳都是 <b>sp² 杂化</b>，形成平面正六边形 σ 骨架，键角约 120°，全部原子共平面。',
+            '每个碳还剩<b>一个未杂化的 p 轨道</b>，垂直于环平面且相互平行。',
+            '六个 p 轨道整体侧面重叠，形成多个离域 π 分子轨道；六个 π 电子占据其中较低能的三个，上下均有离域电子密度，分子平面是 π 轨道节面。'
+        ],
+        summary: '苯的六个 p 轨道一起重叠成 Π₆⁶，所以六个 C–C 键<b>完全等同</b>（139 pm，介于单键 154 pm 与双键 134 pm 之间）。',
+        pitfall: '凯库勒式可用于形式表示，但不能把某一个式子的单双键交替当作苯真实固定的长短键；实测六个 C–C 键等长。',
+        advancedNote: '切换「单个 p 轨道 / 重叠过程 / 离域电子云」三态，再配合「同相位 / 交替相位」，苯的大 π 键就完整了。',
+        steps: [
+            { text: '<b>六个碳 sp² 杂化</b> —— 形成平面六边形 σ 骨架，键角约 120°，所有原子共平面。' },
+            { text: '<b>每个碳剩余一个未杂化 p 轨道</b> —— p 轨道垂直于分子平面，方向一致、相互平行。' },
+            { text: '<b>六个 p 轨道整体耦合</b> —— 形成六个离域 π 分子轨道；六个电子填入其中三个较低能轨道，画面只展示一个组合的相位示意。' },
+            { text: '<b>上下两片环状离域电子云</b> —— 电子云分布在分子平面上下，分子平面本身是节面。' },
+            { text: '<b>表示为 Π₆⁶</b> —— 下标 6 是参与的碳原子数，上标 6 是参与的 π 电子数（6 个碳各贡献 1 个）。' },
+            { text: '<b>六个 C–C 键完全等同</b> —— 键长都是 139 pm，介于单键 154 pm 与双键 134 pm 之间。' }
+        ]
+    },
+    {
+        id: 'phase', no: '3', title: '相位与轨道节点', specimen: 'benzene',
+        switches: [{ id: 'benzene', name: '苯环' }],
+        phaseSwitch: true, meter: true,
+        keys: [
+            '相邻 p 轨道<b>同相位</b>（图纸上都是"上正下负"）→ 该示意轨道核间振幅增强、无键间节点。',
+            '交替系数示例对应一个<b>带节点的高能 π 轨道</b>；它不是苯的全部占据轨道，也不表示苯不能形成离域键。',
+            '相位对比针对<b>单个示意轨道</b>：观察其键间干涉，不能把它当作总电子密度。'
+        ],
+        summary: '相位一致与交替对应不同的轨道组合；图中只比较示意波函数，不是六个 π 电子的总密度。',
+        pitfall: '红蓝只表示波函数的正负号（大学拓展内容），不是电荷正负、也不是两种电子。看不清的时候可以打开「统一配色」。',
+        advancedNote: '按一下「交替相位」，数一数六个 C–C 之间是不是各插进了一个节面。',
+        steps: [
+            { text: '先看<b>同相位</b>：六个 p 轨道"上正下负"方向一致，该组合的核间振幅增强。' },
+            { text: '再切到<b>交替相位</b>：相邻 p 轨道一正一负，六个 C–C 之间各出现一个<b>节面</b>。' },
+            { text: '节点表示该<b>示意轨道</b>在对应位置振幅为零；真实苯仍有其他占据的 π 轨道，不能说它无法形成大 π 键。' }
+        ]
+    },
+    {
+        id: 'butadiene', no: '4', title: '丁二烯 Π₄⁴', specimen: 'butadiene',
+        switches: [{ id: 'butadiene', name: '1,3-丁二烯' }],
+        keys: [
+            '链状分子也能有大 π 键：四个碳共平面，四个 p 轨道连成一条。',
+            'C2–C3 键长约 <b>146 pm</b>，明显短于普通 C–C 单键 154 pm。',
+            '离域使体系能量降低、更稳定，这就是"键长被拉短"的原因。'
+        ],
+        summary: '丁二烯的 Π₄⁴ 把 C2–C3 也"连"进去了，所以它不是普通单键，而是<b>带部分 π 性质</b>的键。',
+        pitfall: '不能把丁二烯看成"两个孤立的 C=C"，否则无法解释 C2–C3 为什么比单键短。',
+        advancedNote: '打开「键长标注」，比较 C2–C3 与两端 C=C 的差别。',
+        steps: [
+            { text: '四个碳先通过 σ 键连成一条<b>平面骨架</b>（键角约 120°）。' },
+            { text: '每个碳再拿出<b>一个未杂化 p 轨道</b>，方向都垂直于骨架平面。' },
+            { text: '四个 p 轨道<b>首尾相接、整体侧面重叠</b>，形成 Π₄⁴。' },
+            { text: '电子离域让体系更稳定，于是中间的 <b>C2–C3 被拉短</b>到约 146 pm。' },
+            { text: '换成"两个孤立 C=C"的错误模型对比一下：中间那条键就不会变短。' },
+            { text: '记住：离域不是把键"画得好看"，而是能被<b>键长数据</b>验证的真实效应。' }
+        ]
+    },
+    {
+        id: 'ions', no: '5', title: '平面型无机离子', specimen: 'carbonate',
+        switches: [{ id: 'carbonate', name: 'CO₃²⁻' }, { id: 'nitrate', name: 'NO₃⁻' }],
+        keys: [
+            'CO₃²⁻ 是平面三角形，中心 C 为 sp² 杂化，四个原子共平面。',
+            '四个原子各出一个 p 轨道，共 6 个 π 电子 → <b>Π₄⁶</b>。',
+            'NO₃⁻ 与 CO₃²⁻ 互为<b>等电子体</b>，大 π 键同样是 Π₄⁶。'
+        ],
+        summary: '三个 C–O 键<b>完全等同</b>（约 131 pm），这正是 Π₄⁶ 存在的实验证据。',
+        pitfall: 'm 不等于 2n：CO₃²⁻ 是 Π₄⁶，不是 Π₄⁸。负电荷带来的 2 个电子也要算进 π 电子里。',
+        advancedNote: '切换 CO₃²⁻ / NO₃⁻：两者的中心原子不同，但离域 π 键完全对应。',
+        steps: [
+            { text: '中心原子 sp² 杂化，与三个氧形成<b>平面三角形</b> σ 骨架。' },
+            { text: '四个原子各提供一个<b>垂直平面的 p 轨道</b>。' },
+            { text: '四个 p 轨道整体重叠，共 <b>6 个 π 电子</b> → Π₄⁶。' },
+            { text: '结果是三个 C–O 键<b>完全等同</b>（约 131 pm，介于单键与双键之间）。' }
+        ]
+    },
+    {
+        id: 'tricenter', no: '6', title: '三中心四电子键', specimen: 'ozone',
+        switches: [{ id: 'ozone', name: 'O₃' }, { id: 'so2', name: 'SO₂' }],
+        keys: [
+            'O₃ 是 V 形分子，但三个原子仍<b>共平面</b>，仍可以形成大 π 键。',
+            'O₃ 按中性原子的轨道贡献计数：中心 O 记 2 个，两端 O 各记 1 个 → 共 4 个；单个路易斯共振式的形式分配不同。',
+            '三个原子、四个 π 电子 → <b>Π₃⁴</b>，也叫三中心四电子键。'
+        ],
+        summary: '这是最容易把 m 记成 2n 的体系：O₃ 是 <b>Π₃⁴</b>，不是 Π₃⁶。',
+        pitfall: 'O₃ 可用中心 2 + 两端各 1 的轨道记账；也可按某一共振式形式记为中心 1 + 两端 2、1。不要把任一种记账当成固定电荷分布。',
+        advancedNote: 'SO₂ 与 O₃ 都有 18 个价电子，但总电子数不同；在这个简化模型中两者均可用 Π₃⁴ 示意。S 的成键涉及更复杂的电子结构。',
+        steps: [
+            { text: '中心原子 sp² 杂化，与两个端位原子形成<b>弯曲</b>的 σ 骨架。' },
+            { text: '按中性原子的轨道贡献记账，O₃ 中心氧记 <b>2 个</b> π 电子。' },
+            { text: '两个端位氧各记 <b>1 个</b>，总数为 4；若按单个路易斯共振式分配，可记中心 1、两端 2 和 1，总数仍为 4。' },
+            { text: '三个 p 轨道整体耦合 → <b>Π₃⁴</b>；O₃ 的两个 O–O 键等价，SO₂ 的两个 S–O 键也等价。' }
+        ]
+    },
+    {
+        id: 'advanced', no: '7', title: '竞赛拓展（可折叠）', specimen: 'pyridine',
+        switches: [
+            { id: 'pyridine', name: '吡啶' }, { id: 'pyrrole', name: '吡咯' },
+            { id: 'cyclopentadienyl', name: '环戊二烯负离子' },
+            { id: 'furan', name: '呋喃' }, { id: 'graphite', name: '石墨层内' },
+            { id: 'naphthalene', name: '萘' }
+        ],
+        keys: [
+            '<b>吡啶 vs 吡咯</b>：N 的孤对电子待在 sp² 轨道上（不参与，Π₆⁶）还是待在 p 轨道上（参与，Π₅⁶）。',
+            '<b>杂原子怎么贡献 π 电子</b>：只看它"没用在 σ 键上的孤对"究竟在哪条轨道上。',
+            '<b>石墨</b>：无数个平行 p 轨道连成一片 π 电子海——能导电、层间易滑动。'
+        ],
+        summary: '同一个氮原子，孤对电子放在不同轨道上，命运完全不同：<b>在 p 轨道上就参与离域，在 sp² 上就不参与</b>。',
+        pitfall: '不要一看到氮就默认"孤对参与大 π 键"。吡啶里的氮就<b>不参与</b>；要判断孤对到底在哪个轨道上。',
+        advancedNote: '这一组默认折叠，属于竞赛拓展内容，不占主线篇幅。',
+        steps: [
+            { text: '先确认环是否<b>共平面</b>、每个原子是否都有垂直的 p 轨道。' },
+            { text: '再看杂原子的<b>孤对电子在哪条轨道上</b>——这一步决定它贡献 0 个还是 2 个 π 电子。' },
+            { text: '把所有贡献加起来得到 m，写出 Π<sub>n</sub><sup>m</sup>。' },
+            { text: '石墨是这一思路的极限情形：平行 p 轨道多到连成一片"电子海"。' }
+        ]
+    },
+    {
+        id: 'myths', no: '8', title: '常见误区与错误模型', specimen: 'benzene',
+        switches: [{ id: 'benzene', name: '苯环' }],
+        modelSwitch: true,
+        keys: [
+            '假设错误：把某一个凯库勒式<b>误当成固定结构</b>，认为苯只有三对互不连通的局域 π 键。',
+            '固定局域单双键会预期两类 C–C 键；<b>真实苯六个键等长</b>，与这种假设矛盾。',
+            '正确模型：<b>六个 p 整体侧面重叠</b>，电子在整个骨架上离域。'
+        ],
+        summary: '3D 中的假设模型人为分隔三团云；真实苯的 π 体系环状连续，<b>六个 C–C 键均约 139 pm</b>。',
+        pitfall: '凯库勒式是有效的共振表示；错误的是把其中一式当成苯真实不变的长短键结构。画面断开云团仅为教学示意。',
+        advancedNote: '先自己判断每条说法的对错，再点开看辨析——主动判断比直接看答案有效得多。',
+        steps: [
+            { text: '假设错误：把某一个凯库勒式误当成<b>固定的局域双键</b>；三团云被人为分隔，不代表真实苯。' },
+            { text: '如果只有三对固定的局域 π 键，会预期交替的长短键，无法解释六个 C–C 键<b>等长</b>。' },
+            { text: '正确模型：六个 p 轨道整体重叠，电子在整个环上<b>离域</b>。' },
+            { text: '两个模型并排对比：差别不在"好不好看"，而在<b>电子属于局部还是整体</b>。' }
+        ]
+    },
+    {
+        id: 'quiz', no: '9', title: '互动自测与总结', specimen: 'benzene',
+        keys: [
+            '覆盖 Πₙᵐ 记号、成键必要条件、图示识别、物种配对与数据推理。',
+            '每题都有即时反馈与解析；答错时解析会指出<b>卡在哪一条判据</b>上。',
+            '先把前面的模块玩一遍，再来做题，效果最好。'
+        ],
+        summary: '能判断题干里<b>缺了哪一条判据</b>，比记住结论更重要。',
+        pitfall: '最常见的两处失分：把 m 当成 2n；把只有 2 个原子参与的体系（乙烯、CO₂）当成大 π 键。',
+        advancedNote: '',
+        steps: [{ text: '自测模块不显示 3D 画面，直接做题即可。' }]
+    }
+];
+const MODULE_MAP = Object.fromEntries(MODULES.map(m => [m.id, m]));
+
+/* 竞赛拓展物种的快捷入口（左栏折叠卡用） */
+const CURATED_SPECIES = [
+    { id: 'pyridine', name: '吡啶' }, { id: 'pyrrole', name: '吡咯' },
+    { id: 'cyclopentadienyl', name: '环戊二烯负离子' }, { id: 'furan', name: '呋喃' },
+    { id: 'graphite', name: '石墨层内' }, { id: 'naphthalene', name: '萘' }
+].map(s => ({ id: s.id, name: s.name }));
+
+/* =====================================================================
+   F. 数据速查表（键长数据；不同教材略有差异，拿不准的写"约"）
+   ===================================================================== */
+const DATA_SOURCE = '常见教材与权威手册的常用值；标注「约」者为近似值，不同来源可能略有差异。';
+const DATA_TABLE = [
+    { key: 'cc1', label: 'C–C 单键', value: '154 pm', hl: ['butadiene', 'myths'] },
+    { key: 'cc2', label: 'C=C 双键', value: '134 pm', hl: ['butadiene', 'myths'] },
+    { key: 'bz', label: '苯的 C–C（六个完全相同）', value: '139 pm', hl: ['benzene', 'phase', 'myths', 'quiz'] },
+    { key: 'bd', label: '丁二烯 C2–C3', value: '约 146 pm', hl: ['butadiene'] },
+    { key: 'co1', label: 'C–O 单键', value: '约 143 pm', hl: ['ions'] },
+    { key: 'co3', label: 'CO₃²⁻ 的三个 C–O（完全相同）', value: '约 131 pm', hl: ['ions'] },
+    { key: 'no3', label: 'NO₃⁻ 的三个 N–O（完全相同）', value: '约 124 pm', hl: ['ions'] },
+    { key: 'oo3', label: 'O₃ 的两个 O–O（完全相同）', value: '约 128 pm', hl: ['tricenter'] },
+    { key: 'so2', label: 'SO₂ 的两个 S–O（完全相同）', value: '约 143 pm', hl: ['tricenter'] },
+    { key: 'oo', label: 'O–O 单键 / O=O 双键', value: '约 148 / 121 pm', hl: ['tricenter'] },
+    { key: 'het', label: '环上 C–N（吡啶 / 吡咯）', value: '约 134 / 137 pm', hl: ['advanced'] },
+    { key: 'gr', label: '石墨层内 C–C', value: '约 142 pm', hl: ['advanced'] },
+    { key: 'naph', label: '萘环上 C–C', value: '约 136~142 pm', hl: ['advanced'] }
+];
+// 随模块变化的解读句
+const DATA_READ = {
+    intro: '先按参与轨道中的 π 电子计数得到 m；键长趋于平均可作为离域的佐证，不能只凭键长下结论。',
+    benzene: '苯的 C–C 键长 139 pm 正好落在单键 154 pm 与双键 134 pm 之间——这就是六个碳碳键完全等同的实验证据。',
+    phase: '苯的六个 C–C 键等长；切换单个示意轨道的相位只改变其节点，不能据此推断分子键长交替。',
+    butadiene: '丁二烯 C2–C3 约 146 pm，比普通单键 154 pm 短——中间那条键也参与了离域。',
+    ions: '三个 C–O 键完全等同（约 131 pm），比 C–O 单键短、比 C=O 长，说明 π 电子是均摊的。',
+    tricenter: 'O₃ 的两个 O–O 完全相同（约 128 pm），介于 O–O 单键与 O=O 双键之间。',
+    advanced: '吡啶与吡咯的 C–N 键长很接近，说明两者环上电子都高度离域，但 π 电子的来源并不相同。',
+    myths: '等长的六个 C–C 键否定的是固定的局域单双键模型，不是否定凯库勒式作为共振表示。',
+    quiz: '数据题先结合结构比较键长，再按参与原子的 p 电子贡献计算 m；键长不能单独决定电子数。',
+    basics: '先记住单键 154 pm、双键 134 pm 这两个基准值，后面所有判断都靠它对照。'
+};
+
+/* =====================================================================
+   G. 六条常见误区（先给错误说法 → 学生先判断 → 再看辨析）
+   ===================================================================== */
+const MYTHS = [
+    {
+        claim: '大 π 键就是几个小 π 键简单相加。', pick: null, open: false,
+        fix: 'n 个平行 p 轨道<b>整体侧面重叠</b>成一个多中心键，电子在整个骨架上离域，不能拆成一个个定域的小 π 键。',
+        why: '如果是"小 π 键相加"，就不能解释为什么苯的六个 C–C 键长完全一样。'
+    },
+    {
+        claim: '苯真实存在三条固定双键，与单键交替。', pick: null, open: false,
+        fix: '苯形成 Π₆⁶，六个 C–C 键<b>完全等同</b>，键长约 139 pm；凯库勒式是形式表示，不是固定的长短键。',
+        why: '固定的局域单双键模型预期键长一长一短，与实验测得六键等长不符。'
+    },
+    {
+        claim: '只要有双键就有大 π 键。', pick: null, open: false,
+        fix: '要看是否满足「<b>共平面 + 相互平行的 p 轨道</b>」，而且参与的原子数要够多。',
+        why: '乙烯仅有两个碳参与，形成普通 π 键；但线形 CO₂ 还可讨论两组相互正交的三中心 π 体系，不能一概而论。'
+    },
+    {
+        claim: 'p 轨道不用管方向，挨得近就能重叠。', pick: null, open: false,
+        fix: 'p 轨道有严格<b>方向性</b>，必须共面且相互平行，才能有效侧面重叠。',
+        why: '方向不一致时，正负相位区互相抵消，核间电子云不增反减。'
+    },
+    {
+        claim: '大 π 键比普通 π 键弱，所以更容易断。', pick: null, open: false,
+        fix: '电子离域使体系<b>能量降低、更稳定</b>；表现为键长缩短、氢化热偏低等。',
+        why: '苯的六个键长被"拉平"到 139 pm，正是离域带来额外稳定性的体现。'
+    },
+    {
+        claim: 'Πₙᵐ 里的 m 就是 n 的两倍。', pick: null, open: false,
+        fix: 'm 由各原子<b>实际贡献</b>的 π 电子数求和决定，与 2n 无关。',
+        why: 'O₃ 是 Π₃⁴ 而不是 Π₃⁶：按中性原子轨道贡献记为中心 2、两端各 1；单个共振式的形式分配可记为中心 1、两端 2 和 1。'
+    }
+];
+
+/* =====================================================================
+   H. 判据小工具
+   ===================================================================== */
+const JUDGE_PRESETS = [
+    { name: '苯环', atoms: ['C', 'C', 'C', 'C', 'C', 'C'], es: [1, 1, 1, 1, 1, 1], coplanar: true, perp: true },
+    { name: '1,3-丁二烯', atoms: ['C', 'C', 'C', 'C'], es: [1, 1, 1, 1], coplanar: true, perp: true },
+    // 按“端位 O - 中心 O - 端位 O”排列，采用中性原子轨道贡献的 1 + 2 + 1 记账。
+    { name: 'O₃', atoms: ['O', 'O', 'O'], es: [1, 2, 1], coplanar: true, perp: true },
+    { name: 'SO₂', atoms: ['S', 'O', 'O'], es: [2, 1, 1], coplanar: true, perp: true },
+    // 一个代表性共振式的形式计数：C=O 的 O 贡献 1，另两个 O 各贡献 2；实际三个 C–O 等价。
+    { name: 'CO₃²⁻', atoms: ['C', 'O', 'O', 'O'], es: [1, 1, 2, 2], coplanar: true, perp: true },
+    { name: '乙烯（反例）', atoms: ['C', 'C'], es: [1, 1], coplanar: true, perp: true }
+];
+
+/* =====================================================================
+   I. 图示识别题用的 SVG 小图（全部代码生成，不引用任何外部图片）
+   ===================================================================== */
+// 一排 p 轨道：dirV=true 表示哑铃都"竖直"（肩并肩、侧面重叠）；false 表示方向不一致/沿键轴
+function svgRow(phases, opts) {
+    const o = Object.assign({ w: 250, h: 104, dirV: true, showOverlap: true }, opts || {});
+    const n = phases.length, gap = o.w / (n + 1), y = o.h / 2;
+    let s = '<svg viewBox="0 0 ' + o.w + ' ' + o.h + '" width="100%" height="auto" role="img">';
+    s += '<line x1="8" y1="' + y + '" x2="' + (o.w - 8) + '" y2="' + y + '" stroke="rgba(140,165,200,.5)" stroke-dasharray="5 5"/>';
+    for (let i = 0; i < n; i++) {
+        const x = gap * (i + 1);
+        const pu = phases[i] === '+' ? POS_COL : NEG_COL;
+        const pd = phases[i] === '+' ? NEG_COL : POS_COL;
+        if (o.dirV) {
+            s += '<ellipse cx="' + x + '" cy="' + (y - 19) + '" rx="14" ry="18" fill="' + pu + '" opacity=".5"/>';
+            s += '<ellipse cx="' + x + '" cy="' + (y + 19) + '" rx="14" ry="18" fill="' + pd + '" opacity=".5"/>';
+        } else {
+            // 沿键轴方向（头碰头）：左右两块，表示 p 轨道方向与键轴一致
+            s += '<ellipse cx="' + (x - 19) + '" cy="' + y + '" rx="18" ry="14" fill="' + pu + '" opacity=".5"/>';
+            s += '<ellipse cx="' + (x + 19) + '" cy="' + y + '" rx="18" ry="14" fill="' + pd + '" opacity=".5"/>';
+        }
+        s += '<circle cx="' + x + '" cy="' + y + '" r="3.2" fill="#cfe0ff"/>';
+    }
+    // 同相且相邻的两个轨道之间，加一团"核间电子云叠加"的高亮
+    if (o.showOverlap) {
+        for (let i = 0; i + 1 < n; i++) {
+            if (phases[i] !== phases[i + 1]) continue;
+            const xm = gap * (i + 1.5);
+            s += '<ellipse cx="' + xm + '" cy="' + (y - 12) + '" rx="13" ry="11" fill="#39e3c5" opacity=".34"/>';
+            s += '<ellipse cx="' + xm + '" cy="' + (y + 12) + '" rx="13" ry="11" fill="#39e3c5" opacity=".34"/>';
+        }
+    }
+    return s + '</svg>';
+}
+// 三中心/多中心示意（把原子画成点、p 轨道画成哑铃）
+const SVG_PHASE_SAME = svgRow(['+', '+', '+'], {});
+const SVG_PHASE_ALT = svgRow(['+', '-', '+'], {});
+const SVG_DIR_V = svgRow(['+', '+', '+'], { showOverlap: false });
+const SVG_DIR_H = svgRow(['+', '+', '+'], { dirV: false, showOverlap: false });
+// 误区对比图：将一个凯库勒式误当固定局域 π 键 / 整体离域
+const SVG_WRONG = (function () {
+    const w = 240, h = 150, cx = w / 2, cy = h / 2 + 6, R = 50;
+    let s = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="auto" role="img">';
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+        const a = (i * 60) * Math.PI / 180;
+        pts.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
+    }
+    // 用形式单双键画出误读的局域模型，不代表凯库勒式本身不能使用。
+    for (let i = 0; i < 6; i++) {
+        const p = pts[i], q = pts[(i + 1) % 6];
+        s += '<line x1="' + p[0] + '" y1="' + p[1] + '" x2="' + q[0] + '" y2="' + q[1] + '" stroke="#8fa6c9" stroke-width="1.6"/>';
+        if (i % 2 === 0) {
+            const k = 0.78;   // 内圈那条"第二根键"按比例缩向圆心，示意双键
+            s += '<line x1="' + (cx + (p[0] - cx) * k) + '" y1="' + (cy + (p[1] - cy) * k) + '" x2="' +
+                (cx + (q[0] - cx) * k) + '" y2="' + (cy + (q[1] - cy) * k) + '" stroke="#ff5f72" stroke-width="1.6"/>';
+        }
+    }
+    pts.forEach(p => { s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="4" fill="#cfe0ff"/>'; });
+    // 三个互不相连的小 π 键云团
+    for (let i = 0; i < 6; i += 2) {
+        const p = pts[i], q = pts[(i + 1) % 6];
+        s += '<ellipse cx="' + ((p[0] + q[0]) / 2) + '" cy="' + ((p[1] + q[1]) / 2) + '" rx="15" ry="19" fill="#ff5f72" opacity=".45"/>';
+    }
+    s += '<text x="' + (w / 2) + '" y="' + (h - 4) + '" text-anchor="middle" font-size="11" fill="#ff8a99">三对固定 π 键（错误假设）</text>';
+    return s + '</svg>';
+})();
+const SVG_RIGHT = (function () {
+    const w = 240, h = 150, cx = w / 2, cy = h / 2 - 4, R = 52;
+    let s = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="auto" role="img">';
+    const pts = [];
+    for (let i = 0; i < 6; i++) {
+        const a = (i * 60) * Math.PI / 180;
+        pts.push([cx + R * Math.cos(a), cy + R * Math.sin(a)]);
+    }
+    for (let i = 0; i < 6; i++) {
+        const p = pts[i], q = pts[(i + 1) % 6];
+        s += '<line x1="' + p[0] + '" y1="' + p[1] + '" x2="' + q[0] + '" y2="' + q[1] + '" stroke="#8fa6c9" stroke-width="1.6"/>';
+    }
+    pts.forEach(p => {
+        s += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="4" fill="#cfe0ff"/>';
+        s += '<line x1="' + p[0] + '" y1="' + (p[1] - 22) + '" x2="' + p[0] + '" y2="' + (p[1] + 22) + '" stroke="#39e3c5" stroke-width="1.2" opacity=".7"/>';
+        s += '<ellipse cx="' + p[0] + '" cy="' + (p[1] - 16) + '" rx="7" ry="9" fill="#39e3c5" opacity=".5"/>';
+        s += '<ellipse cx="' + p[0] + '" cy="' + (p[1] + 16) + '" rx="7" ry="9" fill="#39e3c5" opacity=".5"/>';
+    });
+    s += '<circle cx="' + cx + '" cy="' + cy + '" r="' + (R + 14) + '" fill="none" stroke="#39e3c5" stroke-width="2" opacity=".55" stroke-dasharray="6 5"/>';
+    s += '<text x="' + (w / 2) + '" y="' + (h - 4) + '" text-anchor="middle" font-size="11" fill="#5ce3c4">连续环云 · 六键等长（真实苯）</text>';
+    return s + '</svg>';
+})();
+
+/* =====================================================================
+   J. 互动自测题库（13 题，题型混合）
+   ===================================================================== */
+const QUIZ_TYPES = [
+    { key: 'all', name: '全部' }, { key: 'choice', name: '选择' }, { key: 'judge', name: '判断' },
+    { key: 'diagram', name: '图示' }, { key: 'match', name: '配对' }, { key: 'data', name: '数据' }
+];
+const PI_LABEL = (n, m) => 'Π<sub>' + n + '</sub><sup>' + m + '</sup>';
+const QUIZ_BANK = [
+    {
+        id: 'q1', type: 'choice',
+        q: '大 π 键记号 ' + PI_LABEL('n', 'm') + ' 中，下标 n 表示什么？',
+        options: ['参与离域的<b>原子数</b>（也就是提供的 p 轨道数）', '参与离域的 π 电子数', '分子中双键的个数', '分子中 σ 键的个数'],
+        answer: 0,
+        explain: 'n 是参与离域的<b>原子数</b>，也就是相互平行的 p 轨道数；上标 m 才是 π 电子数。两个下标分开记，就不会把 m 当成 2n。'
+    },
+    {
+        id: 'q2', type: 'choice',
+        q: '苯的大 π 键应写作？',
+        options: [PI_LABEL(6, 6), PI_LABEL(6, 12), PI_LABEL(3, 6), PI_LABEL(6, 3)],
+        answer: 0,
+        explain: '6 个碳各提供一个 p 轨道 → n = 6；每个碳贡献 1 个 π 电子 → m = 6，所以是 ' + PI_LABEL(6, 6) + '。'
+    },
+    {
+        id: 'q3', type: 'choice',
+        q: '下列各项中，<b>不属于</b>形成大 π 键必要条件的是？',
+        options: ['每个参与原子都必须有孤对电子', '参与原子大致共平面', '每个原子有垂直于该平面的 p 轨道且相互平行', '参与离域的原子数要有 3 个及以上'],
+        answer: 0,
+        explain: '并非每个原子都要有孤对电子：苯的六个碳各只有 1 个 p 电子，照样能形成 ' + PI_LABEL(6, 6) + '。判据是「共面 + 平行 p 轨道 + 电子数允许整体重叠」。'
+    },
+    {
+        id: 'q4', type: 'judge',
+        q: '判断：大 π 键就是几个小 π 键简单相加。',
+        options: ['正确', '错误'],
+        answer: 1,
+        explain: '错。n 个平行 p 轨道是<b>整体侧面重叠</b>成一个多中心键，电子在整个骨架中离域；拆成"几个定域小 π 键"就解释不了苯六个 C–C 键长完全一样。'
+    },
+    {
+        id: 'q5', type: 'judge',
+        q: '判断：苯分子真实存在固定的单双键交替。',
+        options: ['正确', '错误'],
+        answer: 1,
+        explain: '错。苯形成 ' + PI_LABEL(6, 6) + '，六个 C–C 键<b>完全等同</b>，键长约 139 pm；凯库勒式只是形式表示，不能当作固定长短键。'
+    },
+    {
+        id: 'q6', type: 'judge',
+        q: '判断：只要分子里有双键，就一定有大 π 键。',
+        options: ['正确', '错误'],
+        answer: 1,
+        explain: '错。乙烯只有两个碳参与普通 π 键；是否离域要看参与原子数与轨道方向。线形 CO₂ 有相互正交的 π 体系，不能与乙烯混为一谈。'
+    },
+    {
+        id: 'q7', type: 'diagram',
+        q: '下面两幅图中，哪一幅表示<b>无键间节点的同相示意组合</b>？',
+        diagrams: [
+            { svg: SVG_PHASE_SAME, cap: '图甲：三个 p 轨道相位相同' },
+            { svg: SVG_PHASE_ALT, cap: '图乙：三个 p 轨道相位交替' }
+        ],
+        options: ['图甲', '图乙', '两幅都可以', '两幅都不行'],
+        answer: 0,
+        explain: '图甲是无键间节点的同相组合；图乙是有节点的高能组合。两者都只是单个 π 轨道的示意，不是整个分子的总电子密度。'
+    },
+    {
+        id: 'q8', type: 'diagram',
+        q: '下面两幅图里，哪一幅的 p 轨道取向<b>能</b>产生有效侧面重叠？',
+        diagrams: [
+            { svg: SVG_DIR_V, cap: '图甲：所有 p 轨道都垂直于键轴（相互平行）' },
+            { svg: SVG_DIR_H, cap: '图乙：p 轨道沿着键轴方向（头碰头）' }
+        ],
+        options: ['图甲', '图乙', '两幅都可以', '两幅都不行'],
+        answer: 0,
+        explain: '图甲是<b>肩并肩的侧面重叠</b>，这才是 π 型重叠；图乙是头碰头，属于 σ 型重叠，不构成大 π 键。'
+    },
+    {
+        id: 'q9', type: 'match',
+        q: '把物种与它的大 π 键配对（点击左边的物种，再点右边的离域 π 键）。',
+        left: [{ k: 'benzene', t: '苯' }, { k: 'butadiene', t: '1,3-丁二烯' }, { k: 'ozone', t: 'O₃' }, { k: 'carbonate', t: 'CO₃²⁻' }],
+        right: [{ k: 'p66', t: PI_LABEL(6, 6) }, { k: 'p44', t: PI_LABEL(4, 4) }, { k: 'p34', t: PI_LABEL(3, 4) }, { k: 'p46', t: PI_LABEL(4, 6) }],
+        answer: { benzene: 'p66', butadiene: 'p44', ozone: 'p34', carbonate: 'p46' },
+        explain: '苯：6 原子 6 电子 → ' + PI_LABEL(6, 6) + '；丁二烯：4 原子 4 电子 → ' + PI_LABEL(4, 4) +
+            '；O₃：3 原子 4 电子 → ' + PI_LABEL(3, 4) + '；CO₃²⁻：4 原子 6 电子 → ' + PI_LABEL(4, 6) + '。'
+    },
+    {
+        id: 'q10', type: 'data',
+        q: '某分子中三个 C–O 键长均为约 131 pm（已知 C–O 单键约 143 pm、C=O 双键约 122 pm）。下列说法最合理的是？',
+        options: ['三个键完全等同，说明存在离域大 π 键', '分子里有三个单键', '分子里有三个双键', '键长数据与成键方式无关'],
+        answer: 0,
+        explain: '键长被"拉平"到单键与双键之间，正是 π 电子在三个 C–O 之间<b>均摊</b>的结果（对应 CO₃²⁻ 的 ' + PI_LABEL(4, 6) + '）。'
+    },
+    {
+        id: 'q11', type: 'data',
+        q: '1,3-丁二烯中 C2–C3 键长约 146 pm（C–C 单键 154 pm、C=C 双键 134 pm）。这说明？',
+        options: ['C2–C3 也带上了部分 π 性质，发生了离域', 'C2–C3 是普通单键，数据测量有误', 'C2–C3 是完整双键', '离域只发生在 C1=C2 和 C3=C4 上'],
+        answer: 0,
+        explain: 'C2–C3 的键长落在单键与双键之间，说明它也被离域 π 键"覆盖"了——这正是 ' + PI_LABEL(4, 4) + ' 的实验证据。'
+    },
+    {
+        id: 'q12', type: 'choice',
+        q: 'O₃ 的大 π 键是 ' + PI_LABEL(3, 4) + '，m = 4 的原因是？',
+        options: ['按中性原子轨道贡献记为中心 2 个、两端各 1 个', '三个氧各提供 1 个，再加上分子带 1 个负电荷', '三个氧各提供 2 个，减去 2 个', '氧原子的价电子数本来就是 4'],
+        answer: 0,
+        explain: '三个氧各出一个 p 轨道（n = 3）；按中性原子轨道贡献记为中心 2、两端各 1，共 4 个。若按单个共振式形式分配可记中心 1、两端 2 和 1，两种记账都不能当作固定的真实电荷分布。'
+    },
+    {
+        id: 'q13', type: 'choice',
+        q: '页面里电子云的红、蓝两色代表什么？',
+        options: ['波函数的正相位与负相位（拓展内容）', '正电荷与负电荷', '两种不同的电子', '成键电子与反键电子'],
+        answer: 0,
+        explain: '红蓝表示波函数的<b>正负相位</b>，属于大学《结构化学》的拓展内容，高中阶段只需知道"相位一致才好重叠"。它不是电荷，也不是两类电子——看不惯可以打开「统一配色」。'
+    }
+];
+/* @@PART_DATA_END@@ */
+/* =====================================================================
+   K. 三维渲染引擎
+   ---------------------------------------------------------------------
+   核心思路（继承上一个项目的成功方案）：
+   ① 预生成一份"稀疏三维点阵"（gridSize³ 个点）；
+   ② 把每个原子的 p 轨道当作一个"通道"，在顶点着色器里做线性原子轨道组合 LCAO；
+   ③ 大 π 键的关键：所有参与原子填【同一个通道号】，一次叠加就自然得到离域云；
+   ④ 概率密度 ρ = Σψ²，再按相位给颜色、按深度做雾化。
+   ===================================================================== */
+
+const START_DIST = 1.55;   // 进度 0（独立原子）时，原子间距是基准的 1.55 倍
+const END_DIST = 1.00;     // 进度 1（离域成型）时回到基准间距
+const FOV = 42;            // 相机视场角
+const MAX_ATOMS = 16;      // uniform 数组预留的原子槽位（萘需要 10 个，石墨这里用了 12 个）
+
+const ACCENT_DARK = 0x49d6ff, ACCENT_LIGHT = 0x1d7fd0;
+
+/* ---- uniform 数组的"槽位池" ----
+   ★ 踩过的坑（非常重要）：Three.js r128 上传 vec3 数组 uniform 时，会按着色器里
+   【声明的长度】(16) 去读数组；如果只填了"实际原子数"个元素（例如苯只有 6 个），
+   就会在第一帧抛 "Cannot read properties of undefined"，而且因为异常发生在
+   requestAnimationFrame 回调里，整个渲染循环会【静默停掉】——页面看着没报错，画面却全空。
+   所以这里统一准备 16 个槽位，用不到的槽位填 0 / (0,0,1)，长度永远与声明一致。 */
+const UP_Z = new THREE.Vector3(0, 0, 1);
+const _poolPos = new Array(MAX_ATOMS).fill(0).map(() => new THREE.Vector3());
+const _poolDir = new Array(MAX_ATOMS).fill(0).map(() => new THREE.Vector3(0, 0, 1));
+const _coeffSame = new Array(MAX_ATOMS).fill(1);
+const _coeffAlt = new Array(MAX_ATOMS).fill(1);
+const _bondLocal = new Array(MAX_ATOMS).fill(0);
+const _bondRight = new Array(MAX_ATOMS).fill(0);
+const _bondWrong = new Array(MAX_ATOMS).fill(0);
+
+/* ---- 化学符号贴图：用 canvas 现场画出来，绝不引用外部图片 ---- */
+const _spriteCache = {};
+function labelTexture(text, sub) {
+    const key = text + '|' + (sub || '');
+    if (_spriteCache[key]) return _spriteCache[key];
+    const S = 256;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = S;
+    const ctx = cv.getContext('2d');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // 先描一圈深色边，保证亮背景下也读得清
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = 'rgba(4,10,22,.85)';
+    ctx.font = 'bold 118px "Segoe UI","Microsoft YaHei",sans-serif';
+    const ty = sub ? S / 2 - 26 : S / 2;
+    ctx.strokeText(text, S / 2, ty);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, S / 2, ty);
+    if (sub) {
+        ctx.font = '600 60px "Segoe UI","Microsoft YaHei",sans-serif';
+        ctx.strokeText(sub, S / 2, S / 2 + 68);
+        ctx.fillStyle = '#bfe6ff';
+        ctx.fillText(sub, S / 2, S / 2 + 68);
+    }
+    const t = new THREE.CanvasTexture(cv);
+    _spriteCache[key] = t;
+    return t;
+}
+
+/* ---- 电子云的顶点/片元着色器（本项目最关键的一段代码） ---- */
+const CLOUD_VERT = `
+uniform int   numAtoms;
+uniform vec3  atomPos[16];     // 每个参与原子的位置
+uniform vec3  atomDir[16];     // 每个 p 轨道的取向（大 π 键里全部垂直于分子平面）
+uniform float atomCoeff[16];   // ★ 相位系数：+1 / -1，本项目的主角
+uniform float weightS[16];     // s 成分权重（大 π 键体系里全部为 0）
+uniform float weightP[16];     // p 成分权重（大 π 键体系里全部为 1）
+uniform float atomScale[16];   // 原子轨道的大小比例
+uniform int   atomBond[16];    // ★ MO 通道号：大 π 键的关键——所有原子填同一个通道号
+uniform float pSharpness;      // p 轨道胖瘦（越大越细长）
+uniform float densityMultiplier;
+uniform float localOnly;      // 独立轨道只加密度，不允许跨原子干涉
+uniform float moCross;         // 两条 MO 通道之间的干涉权重（≥2 条通道时才起作用）
+uniform float isolatedPairView; // 仅错误假设视图：强调三对局域云之间的人为断口
+uniform vec3  colorPos;
+uniform vec3  colorNeg;
+uniform float themeAlpha;      // 浅色主题整体透明度倍率
+uniform float themeInk;        // 浅色主题颜色压深
+uniform float camDist; uniform float depthRange; uniform float fogMin;
+uniform float layerAlpha;      // 该层的透明度系数（核心层 / 光晕层不同）
+uniform float layerPointScale; // 该层的点放大倍率
+uniform float pointSizeGain;   // 密度 → 点大小的放大系数
+uniform float pointSizeMax;    // 点大小上限
+
+varying vec3  vColor;
+varying float vAlpha;
+
+void main() {
+    // ① 线性原子轨道组合（LCAO）：把每个原子的 s / p 成分按相位系数累加到它所属的 MO 通道。
+    //    大 π 键的所有原子共用同一条通道，所以这一次累加本身就是"多中心离域波函数"。
+    float psi[6];
+    float localDensity = 0.0, localSign = 0.0, localMax = 0.0;
+    for (int j = 0; j < 6; j++) psi[j] = 0.0;
+    for (int i = 0; i < 16; i++) {
+        if (i >= numAtoms) break;
+        vec3  r    = position - atomPos[i];
+        float rLen = length(r);
+        float dist = rLen / atomScale[i];
+        vec3  dir  = atomDir[i];
+        float radial = exp(-dist);                                  // 简化的类氢径向部分
+        float s_part = weightS[i] * radial;                         // s 成分：球对称
+        float cosTheta = dot(r, dir) / (rLen + 0.0001);             // ★ p 轨道的方向性就在这里
+        float p_part = weightP[i] * sign(cosTheta) * pow(abs(cosTheta), pSharpness) * rLen * radial;
+        float val = (s_part + p_part) * atomCoeff[i];               // ★ 相位系数在此生效
+        float localD = val * val;
+        localDensity += localD;
+        if (localD > localMax) { localMax = localD; localSign = val; }
+        int b = atomBond[i];
+        for (int j = 0; j < 6; j++) { if (j == b) psi[j] += val; }  // 同通道叠加 = 离域
+    }
+
+    // ② 这里只对示意轨道的振幅平方取样；真实多电子密度需把各占据分子轨道逐一加权，
+    //    不能将这张单轨道相位图当成从头算得到的苯/无机离子的总电荷密度。
+    float density = 0.0, maxPsi = 0.0, maxAbs = 0.0;
+    for (int j = 0; j < 6; j++) {
+        float p2 = psi[j] * psi[j];
+        density += p2;
+        if (p2 > maxAbs) { maxAbs = p2; maxPsi = psi[j]; }          // 主导通道决定相位颜色
+    }
+
+    // ③ 通道间干涉项：只有存在两条以上 MO 通道时才起作用（例如"小 π 键相加"的错误模型）
+    density += 2.0 * moCross * psi[0] * psi[1];
+    density = mix(density, localDensity, localOnly);
+    maxPsi = mix(maxPsi, localSign, localOnly);
+
+    // 错误假设的三对云原本在透明叠加下看似连续；仅在苯的对比视图里
+    // 按每对轨道的中点给出渐隐边界，明确这是教学断开示意而非真实波函数。
+    if (isolatedPairView > 0.5) {
+        float pairDistance = min(
+            length(position.xy - (atomPos[0].xy + atomPos[1].xy) * 0.5),
+            min(length(position.xy - (atomPos[2].xy + atomPos[3].xy) * 0.5),
+                length(position.xy - (atomPos[4].xy + atomPos[5].xy) * 0.5))
+        );
+        float bondSpan = length(atomPos[0].xy - atomPos[1].xy);
+        density *= 1.0 - smoothstep(bondSpan * 0.55, bondSpan * 0.76, pairDistance);
+    }
+
+    // ④ 着色与可见性映射
+    vColor = maxPsi > 0.0 ? colorPos : colorNeg;
+    vColor = mix(vColor, vColor * 0.6, themeInk);                   // 浅色主题下把颜色压深
+    float dd = density * densityMultiplier;
+    float cutoff = mix(0.002, 0.0007, localOnly);
+    vAlpha = smoothstep(cutoff, 0.5, dd) * layerAlpha * themeAlpha;
+    // 点大小也随密度变化：密处大一点、疏处小一点，做出"颗粒感"而不是一坨实心光斑
+    float ps = clamp(dd * pointSizeGain, 1.0, pointSizeMax) * layerPointScale;
+    if (dd < cutoff) ps = 0.0;                                      // 独立轨道保留更多稀薄的边缘光点
+
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    // 深度雾化：越靠近观察者越亮，做出"有前后层次的云"，而不是一层发光贴片
+    float behind = clamp(((-mv.z) - camDist) / depthRange, 0.0, 1.0);
+    vAlpha *= mix(1.0, fogMin, behind);
+    ps *= (15.0 / -mv.z);                                           // 近大远小
+    gl_PointSize = ps;
+    gl_Position = projectionMatrix * mv;
+}`;
+
+const CLOUD_FRAG = `
+uniform float layerFalloff;
+varying vec3  vColor;
+varying float vAlpha;
+void main() {
+    // 高斯圆形光点：边缘必须柔和，禁止出现方块状的点
+    vec2 c = gl_PointCoord - vec2(0.5);
+    float ll = dot(c, c) * 4.0;
+    float a = exp(-ll * layerFalloff);
+    float al = vAlpha * a;
+    if (al < 0.003) discard;
+    gl_FragColor = vec4(vColor, al);
+}`;
+
+const ENGINE = {
+    renderer: null, scene: null, camera: null, wrap: null,
+    spec: null, cloudGeo: null, localCloudGeo: null,
+    cloudLocal: null, cloudDeloc: null,   // 两个云：单个 p 轨道 / 整体离域
+    world: null, skeleton: null, overlap: null, nodes: null, plane: null, axes: null,
+    cam: { theta: 0, phi: 0.95, dist: 14 },
+    camAnim: null,
+    camTouched: false,      // 用户是否手动转过/缩放过（手动动过之后就不再自动重新取景）
+    viewKey: 'main',
+    floatItems: [],
+    viewH: 600,             // 舞台的可视高度（像素）
+    panPx: 0,               // 竖直避让：正数向上，负数向下
+    panSmooth: 0,           // 上面这个偏移的平滑值（避免开合面板时画面突跳）
+    panXPx: 0,              // 桌面端右侧判据工具展开时，模型向左让出空间
+    panXSmooth: 0,
+    visibleWidthFraction: 1,
+    quality: 'high',
+
+    /* ---- 初始化渲染器（容器初始可能宽高为 0，先兜 1×1 再校正） ---- */
+    init(wrap) {
+        this.wrap = wrap;
+        const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
+        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        this.renderer.setSize(w, h);
+        this.renderer.setClearColor(0x000000, 0);   // 透明清屏，让页面极光背景透出来
+        wrap.appendChild(this.renderer.domElement);
+
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 400);
+        this.camera.position.set(0, -12, 10);
+
+        // 光照：一主一补，勾勒出原子球的体积感（电子云自带发光，不参与光照）
+        this.scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+        const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(6, -8, 12); this.scene.add(key);
+        const fill = new THREE.DirectionalLight(0x88bbff, 0.45); fill.position.set(-8, 6, -6); this.scene.add(fill);
+
+        this.world = new THREE.Group();       // 骨架 + 重叠区 + 节面 + 分子平面（跟着间距一起缩放）
+        this.scene.add(this.world);
+        this.axes = new THREE.AxesHelper(3);
+        this.axes.visible = false;
+        this.scene.add(this.axes);
+
+        this.bindControls();
+    },
+
+    /* ---- 生成点阵（包围盒按分子尺寸重算，只保留靠近参与原子的点，省性能） ---- */
+    buildCloud(spec, quality) {
+        if (this.localCloudGeo && this.localCloudGeo !== this.cloudGeo) this.localCloudGeo.dispose();
+        if (this.cloudGeo) { this.cloudGeo.dispose(); this.cloudGeo = null; }
+        this.localCloudGeo = null;
+        const range = spec.range;
+        // 关键：按"最散开"的状态（START_DIST）来裁剪点阵，
+        // 这样原子被推远时电子云仍然落在点阵范围内，不会被裁掉一块。
+        const anchors = spec.pi.map(p => [p.pos[0] * START_DIST, p.pos[1] * START_DIST, p.pos[2] * START_DIST]);
+        const trim2 = spec.trim * spec.trim;
+        const makeGeometry = n => {
+            const step = 2 * range / (n - 1);
+            const pos = [];
+            for (let i = 0; i < n; i++) {
+                const x = -range + i * step;
+                for (let j = 0; j < n; j++) {
+                    const y = -range + j * step;
+                    for (let k = 0; k < n; k++) {
+                        const z = -range + k * step;
+                        let keep = false;
+                        for (let a = 0; a < anchors.length; a++) {
+                            const dx = x - anchors[a][0], dy = y - anchors[a][1], dz = z - anchors[a][2];
+                            if (dx * dx + dy * dy + dz * dz < trim2) { keep = true; break; }
+                        }
+                        if (keep) pos.push(x, y, z);
+                    }
+                }
+            }
+            const g = new THREE.BufferGeometry();
+            g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+            g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), range * 1.1);
+            return g;
+        };
+        this.cloudGeo = makeGeometry(GRID_SIZE[quality] || GRID_SIZE.high);
+        // 单独的轨道云可加密取样；整体离域云始终沿用原来的点阵和亮度。
+        this.localCloudGeo = spec.localGridSize
+            ? makeGeometry(spec.localGridSize[quality] || GRID_SIZE[quality] || GRID_SIZE.high)
+            : this.cloudGeo;
+    },
+
+    /* ---- 创建一层的电子云材质（核心层 / 光晕层参数不同） ---- */
+    mkCloudMaterial(layer) {
+        const isHalo = layer === 'halo';
+        const u = {
+            numAtoms: { value: 0 },
+            atomPos: { value: new Array(MAX_ATOMS).fill(0).map(() => new THREE.Vector3()) },
+            atomDir: { value: new Array(MAX_ATOMS).fill(0).map(() => new THREE.Vector3(0, 0, 1)) },
+            atomCoeff: { value: new Array(MAX_ATOMS).fill(1) },
+            weightS: { value: new Array(MAX_ATOMS).fill(0) },
+            weightP: { value: new Array(MAX_ATOMS).fill(1) },
+            atomScale: { value: new Array(MAX_ATOMS).fill(2) },
+            atomBond: { value: new Array(MAX_ATOMS).fill(0) },
+            pSharpness: { value: RENDER_TUNING.defaultSharpness },
+            densityMultiplier: { value: RENDER_TUNING.defaultDensity },
+            localOnly: { value: 0 },
+            moCross: { value: 0 },
+            isolatedPairView: { value: 0 },
+            colorPos: { value: new THREE.Color(colorPos) },
+            colorNeg: { value: new THREE.Color(colorNeg) },
+            themeAlpha: { value: 1 },
+            themeInk: { value: 0 },
+            camDist: { value: 12 },
+            depthRange: { value: RENDER_TUNING.depthRange },
+            fogMin: { value: RENDER_TUNING.fogMin },
+            layerAlpha: { value: isHalo ? RENDER_TUNING.haloAlpha : RENDER_TUNING.coreAlpha },
+            layerPointScale: { value: isHalo ? RENDER_TUNING.haloPointScale : 1.0 },
+            pointSizeGain: { value: RENDER_TUNING.pointSizeGain },
+            pointSizeMax: { value: RENDER_TUNING.pointSizeMax },
+            layerFalloff: { value: isHalo ? RENDER_TUNING.haloFalloff : RENDER_TUNING.coreFalloff }
+        };
+        const m = new THREE.ShaderMaterial({
+            uniforms: u, vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG,
+            transparent: true, depthWrite: false, depthTest: true,
+            blending: THREE.AdditiveBlending
+        });
+        return m;
+    },
+
+    /* ---- 创建两层云（核心层清晰 + 光晕层大而淡） ---- */
+    mkCloudPair(geometry = this.cloudGeo) {
+        const g = new THREE.Group();
+        const core = new THREE.Points(geometry, this.mkCloudMaterial('core'));
+        const halo = new THREE.Points(geometry, this.mkCloudMaterial('halo'));
+        halo.renderOrder = -1;
+        g.add(core); g.add(halo);
+        return g;
+    },
+
+    /* ---- 重建整个场景内容（切换物种 / 切换画质时调用） ---- */
+    setSpecimen(spec, quality) {
+        if (!spec || !this.renderer) return;
+        if (spec.pi.length > MAX_ATOMS) {
+            console.error('[大π键可视化] 参与离域的原子数 ' + spec.pi.length +
+                ' 超过了 uniform 数组长度 ' + MAX_ATOMS + '，请同步扩大数组长度后再试。');
+        }
+        this.spec = spec;
+        this.quality = quality || this.quality;
+        this.buildCloud(spec, this.quality);
+
+        // 清掉旧内容（几何体与材质都要释放，否则反复切模块会占显存）
+        while (this.world.children.length) {
+            const c = this.world.children.pop();
+            c.traverse(o => {
+                if (o.geometry && o.geometry !== this.cloudGeo) o.geometry.dispose();
+                if (o.material) o.material.dispose();
+            });
+        }
+        if (this.cloudLocal) { this.disposeCloud(this.cloudLocal); this.scene.remove(this.cloudLocal); this.cloudLocal = null; }
+        if (this.cloudDeloc) { this.disposeCloud(this.cloudDeloc); this.scene.remove(this.cloudDeloc); this.cloudDeloc = null; }
+
+        // 两层云：cloudDeloc = 整体离域（所有原子同一通道）；cloudLocal = 每个 p 轨道各自独立
+        this.cloudDeloc = this.mkCloudPair();
+        this.cloudLocal = this.mkCloudPair(this.localCloudGeo);
+        this.scene.add(this.cloudLocal);
+        this.scene.add(this.cloudDeloc);
+
+        this.buildSkeleton(spec);
+        this.buildOverlap(spec);
+        this.buildNodes(spec);
+        this.buildPlane(spec);
+        this.axes.scale.setScalar(spec.range / 6);
+        this.primeStaticUniforms(spec);
+    },
+
+    /* ---- 每个物种固定不变的 uniform（s/p 权重、轨道大小）只推一次，省性能 ---- */
+    primeStaticUniforms(spec) {
+        const n = spec.pi.length;
+        [this.cloudLocal, this.cloudDeloc].forEach(pair => {
+            if (!pair) return;
+            pair.children.forEach(pts => {
+                const u = pts.material.uniforms;
+                for (let i = 0; i < MAX_ATOMS; i++) {
+                    // 大 π 键体系里全部是未杂化的 p 轨道：没有 s 成分，p 成分为 1
+                    u.weightS.value[i] = 0;
+                    u.weightP.value[i] = 1;
+                    u.atomScale.value[i] = i < n ? ELEM[spec.pi[i].el].orb : 1;
+                }
+            });
+        });
+    },
+
+    /* ---- 释放一个云的材质（几何体是共享的，不能在这里释放） ---- */
+    disposeCloud(group) {
+        group.children.forEach(p => { if (p.material) p.material.dispose(); });
+    },
+
+    /* ---- σ 骨架：原子球 + 化学键 + 元素符号标签 ---- */
+    buildSkeleton(spec) {
+        const g = new THREE.Group();
+        const sphereGeo = new THREE.SphereGeometry(1, 20, 14);
+        const matCache = {};
+        const matOf = (el) => {
+            if (!matCache[el]) {
+                matCache[el] = new THREE.MeshStandardMaterial({
+                    color: ELEM[el].color, roughness: 0.42, metalness: 0.25
+                });
+            }
+            return matCache[el];
+        };
+        spec.frame.forEach(a => {
+            const m = new THREE.Mesh(sphereGeo, matOf(a.el));
+            m.position.fromArray(a.pos);
+            m.scale.setScalar(ELEM[a.el].r);
+            g.add(m);
+        });
+        // 圆柱表示 σ 骨架的连接拓扑，不把它冒充为 σ 电子密度；
+        // 定域双键画两条，并用垂直分子平面的 p 云单独说明 π 成分。
+        const cylGeo = new THREE.CylinderGeometry(0.07, 0.07, 1, 10);
+        const bondMat = new THREE.MeshStandardMaterial({
+            color: 0x7f9ac0, roughness: 0.6, metalness: 0.2,
+            transparent: true, opacity: 0, depthWrite: false
+        });
+        this.bondMaterial = bondMat;
+        const up = new THREE.Vector3(0, 1, 0);
+        spec.bonds.forEach(b => {
+            const A = new THREE.Vector3().fromArray(spec.frame[b[0]].pos);
+            const B = new THREE.Vector3().fromArray(spec.frame[b[1]].pos);
+            const dir = new THREE.Vector3().subVectors(B, A);
+            const len = dir.length();
+            const axis = dir.clone().normalize();
+            const offsets = b[2] === 2 ? [-0.10, 0.10] : [0];
+            offsets.forEach(offset => {
+                const mesh = new THREE.Mesh(cylGeo, bondMat);
+                const sideways = new THREE.Vector3(-axis.y, axis.x, 0).multiplyScalar(offset);
+                mesh.position.copy(A).addScaledVector(dir, 0.5).add(sideways);
+                mesh.scale.set(b[2] === 2 ? 0.72 : 1, len, b[2] === 2 ? 0.72 : 1);
+                mesh.quaternion.setFromUnitVectors(up, axis);
+                mesh.userData.isBond = true;
+                g.add(mesh);
+            });
+        });
+        // 元素符号 + 杂化类型标签（只标参与大 π 键的原子，避免画面杂乱）
+        spec.pi.forEach(a => {
+            const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: labelTexture(a.el, 'sp²'), transparent: true, depthWrite: false
+            }));
+            const out = new THREE.Vector2(a.pos[0], a.pos[1]);
+            if (out.length() < 0.001) out.set(0, 1);
+            out.normalize().multiplyScalar(0.78);
+            sp.position.set(a.pos[0] + out.x, a.pos[1] + out.y, 0.1);
+            sp.scale.set(1.0, 1.0, 1.0);
+            sp.renderOrder = 20;
+            g.add(sp);
+        });
+        this.skeleton = g;
+        this.world.add(g);
+    },
+
+    /* ---- 侧面重叠区：沿骨架在平面上下各画一根"重叠发光管" ---- */
+    buildOverlap(spec) {
+        const g = new THREE.Group();
+        // 只有"链状或环状"（每个原子最多 2 个邻居）才画得出一条连续的重叠管。
+        // 石墨、萘这类分支结构的碳有 3 个邻居，硬连会把管子画成一团乱麻，所以直接跳过。
+        const deg = new Array(spec.pi.length).fill(0);
+        spec.adj.forEach(pr => { deg[pr[0]]++; deg[pr[1]]++; });
+        if (!deg.every(d => d <= 2)) { this.overlap = g; this.world.add(g); return; }
+        const pts = spec.pi.map(p => new THREE.Vector3(p.pos[0], p.pos[1], 0));
+        const closed = spec.adj.length === spec.pi.length && spec.pi.length > 2;
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x39e3c5, transparent: true, opacity: 0.30,
+            blending: THREE.AdditiveBlending, depthWrite: false
+        });
+        [0.95, -0.95].forEach(z => {
+            const curve = new THREE.CatmullRomCurve3(
+                pts.map(p => new THREE.Vector3(p.x, p.y, z)), closed, 'catmullrom', 0.35);
+            const geo = new THREE.TubeGeometry(curve, Math.max(32, spec.pi.length * 12), 0.2, 8, closed);
+            g.add(new THREE.Mesh(geo, mat));
+        });
+        this.overlap = g;
+        this.world.add(g);
+    },
+
+    /* ---- 节面：每对相邻原子之间插一片垂直于键的平面 ---- */
+    buildNodes(spec) {
+        const g = new THREE.Group();
+        const geo = new THREE.PlaneGeometry(1.15, 3.0);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xffb648, transparent: true, opacity: 0.22,
+            side: THREE.DoubleSide, depthWrite: false
+        });
+        spec.adj.forEach(pr => {
+            const a = spec.pi[pr[0]].pos, b = spec.pi[pr[1]].pos;
+            const mid = new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, 0);
+            const dir = new THREE.Vector3(b[0] - a[0], b[1] - a[1], 0).normalize();
+            const perp = new THREE.Vector3(-dir.y, dir.x, 0);
+            const basis = new THREE.Matrix4().makeBasis(perp, new THREE.Vector3(0, 0, 1), dir);
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.applyMatrix4(basis);                       // 先摆正
+            mesh.applyMatrix4(new THREE.Matrix4().makeTranslation(mid.x, mid.y, mid.z));  // 再平移
+            g.add(mesh);
+        });
+        this.nodes = g;
+        this.world.add(g);
+    },
+
+    /* ---- 分子平面（它本身就是大 π 键的节面） ---- */
+    buildPlane(spec) {
+        const s = spec.viewR * 1.7;
+        const geo = new THREE.PlaneGeometry(s, s);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x6fa8ff, transparent: true, opacity: 0.07,
+            side: THREE.DoubleSide, depthWrite: false
+        });
+        this.plane = new THREE.Mesh(geo, mat);
+        // 分子平面也要跟着物种的几何中心走，否则 V 形分子上会出现"错位的平面"
+        this.plane.position.set(spec.center[0], spec.center[1], 0);
+        this.plane.visible = false;
+        this.world.add(this.plane);
+    },
+
+    /* ---- 把自己实现的轨道控制绑到画布上（含移动端触控） ---- */
+    bindControls() {
+        const el = this.renderer.domElement;
+        let dragging = false, lastX = 0, lastY = 0;
+        let pinch = 0;
+        const tPos = { x: 0, y: 0 };
+        el.style.touchAction = 'none';
+
+        const onDown = (x, y) => { dragging = true; lastX = x; lastY = y; };
+        const onMove = (x, y) => {
+            if (!dragging) return;
+            const k = 0.007;
+            this.camAnim = null;                       // 手动拖拽时取消自动机位过渡
+            this.camTouched = true;
+            this.cam.phi = Math.max(0.06, Math.min(Math.PI - 0.06, this.cam.phi - (y - lastY) * k));
+            this.cam.theta -= (x - lastX) * k;
+            lastX = x; lastY = y;
+        };
+        const onUp = () => { dragging = false; };
+
+        el.addEventListener('mousedown', e => onDown(e.clientX, e.clientY));
+        window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+        window.addEventListener('mouseup', onUp);
+        el.addEventListener('wheel', e => {
+            e.preventDefault();
+            this.camAnim = null;
+            this.camTouched = true;
+            this.cam.dist = Math.max(this.minDist, Math.min(this.maxDist, this.cam.dist * (1 + e.deltaY * 0.0012)));
+        }, { passive: false });
+
+        // 触控：单指旋转、双指捏合缩放、双指整体拖动
+        el.addEventListener('touchstart', e => {
+            if (e.touches.length === 1) onDown(e.touches[0].clientX, e.touches[0].clientY);
+            else if (e.touches.length === 2) {
+                dragging = false;
+                pinch = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY);
+                tPos.x = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                tPos.y = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            }
+        }, { passive: true });
+        el.addEventListener('touchmove', e => {
+            if (e.touches.length === 1) onMove(e.touches[0].clientX, e.touches[0].clientY);
+            else if (e.touches.length === 2) {
+                e.preventDefault();
+                const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY);
+                if (pinch > 0 && d > 1) {
+                    this.camAnim = null;
+                    this.cam.dist = Math.max(this.minDist, Math.min(this.maxDist, this.cam.dist * pinch / d));
+                }
+                pinch = d;
+            }
+        }, { passive: false });
+        el.addEventListener('touchend', () => { pinch = 0; onUp(); }, { passive: true });
+        // 系统打断手势时清除拖动状态，避免下一次触摸让模型突然跳动。
+        el.addEventListener('touchcancel', () => { pinch = 0; onUp(); }, { passive: true });
+    },
+
+    minDist: 3, maxDist: 60,
+
+    /* ---- 把方向向量换算成球坐标（用于预设机位） ---- */
+    dirToAngles(d) {
+        const l = Math.hypot(d[0], d[1], d[2]) || 1;
+        const x = d[0] / l, y = d[1] / l, z = d[2] / l;
+        return { phi: Math.acos(Math.max(-1, Math.min(1, z))), theta: Math.atan2(x, -y) };
+    },
+
+    /* ---- 预设视角：切换时平滑过渡过去 ---- */
+    setView(spec, key, instant) {
+        const p = spec.viewPresets[key] || spec.viewPresets.main;
+        const a = this.dirToAngles(p.dir);
+        let d = this.fitDistance(spec, key);
+        // 兜底：相机距离一旦算成 NaN/0，整个场景会直接变成空白，
+        // 所以这里加一道保险，宁可退回到一个粗估值。
+        if (!isFinite(d) || d <= 0.1) {
+            console.error('[大π键可视化] 相机距离计算异常，已退回默认值，请检查 fitDistance 与 viewPresets。');
+            d = spec.viewR * 3;
+        }
+        if (instant) {
+            this.cam.theta = a.theta; this.cam.phi = a.phi; this.cam.dist = d;
+            this.camAnim = null;
+        } else {
+            this.camAnim = {
+                t: 0, dur: 0.55,
+                from: { theta: this.cam.theta, phi: this.cam.phi, dist: this.cam.dist },
+                to: { theta: a.theta, phi: a.phi, dist: d }
+            };
+        }
+        this.minDist = d * 0.35; this.maxDist = d * 3.2;
+        this.viewKey = key;
+    },
+
+    /* ---- 按当前视角精确算出"物体在屏幕上占多大"，再求刚好装得下的相机距离 ----
+       为什么不直接用包围球：苯、萘这类分子是"扁平"的，用包围球算会算得太远，
+       投影到屏幕上分子只有巴掌大。这里改成把关键采样点投到相机的"屏幕右轴/上轴"上，
+       取实际最大跨度，再换算成距离。
+       采样点 = 每个参与原子 + 它在平面上下 ±trim/2 的位置（电子云主要分布区），
+       并统一放大 1.35 倍作为"电子云比原子核铺得更开"的余量。 */
+    fitDistance(spec, key) {
+        const p = spec.viewPresets[key] || spec.viewPresets.main;
+        const a = this.dirToAngles(p.dir);
+        const dir = new THREE.Vector3(
+            Math.sin(a.phi) * Math.sin(a.theta),
+            -Math.sin(a.phi) * Math.cos(a.theta),
+            Math.cos(a.phi)
+        ).normalize();
+        const right = new THREE.Vector3(0, 1, 0).cross(dir).normalize();
+        const upv = new THREE.Vector3().crossVectors(dir, right).normalize();
+        const hz = spec.trim * 0.55, spread = 1.35;
+        let hExt = 0.6, vExt = 0.6;
+        const v = new THREE.Vector3();
+        spec.pi.forEach(q => {
+            [0, hz, -hz].forEach(z => {
+                // 以物种自己的几何中心为基准来量跨度，这样画面里的分子才是居中的
+                v.set(q.pos[0] - spec.center[0], q.pos[1] - spec.center[1], z);
+                hExt = Math.max(hExt, Math.abs(v.dot(right)));
+                vExt = Math.max(vExt, Math.abs(v.dot(upv)));
+            });
+        });
+        hExt *= spread; vExt *= spread;
+        const vFov = FOV * Math.PI / 180;
+        // 这里必须用画布【真实】的宽高比：竖屏/窄窗口时宽高比很小，
+        // 若给它设一个偏大的下限，会误以为水平方向很宽，算出的距离偏近 → 分子左右被裁掉。
+        const aspect = Math.max((this.camera.aspect || 1) * this.visibleWidthFraction, 0.05);
+        const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+        const d = Math.max(vExt / Math.tan(vFov / 2), hExt / Math.tan(hFov / 2));
+        // 各模块机位自己的远近微调（数据里 dist 就是"远近倍率"）
+        const zoom = 0.85 + ((p.dist || 1.45) - 1.3) * 0.30;
+        return d * zoom;
+    },
+
+    /* ---- 每帧更新：把界面状态翻译成着色器 uniform 与场景开关 ---- */
+    update(state, dt) {
+        if (!this.spec || !this.renderer) return;
+        const spec = this.spec;
+        const p = state.progress;
+        const ease = (t) => t * t * (3 - 2 * t);                        // 平滑过渡
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+        // ① 原子间距：进度决定"从散开到成键"，间距滑块是独立的第二个自由度
+        const byPhase = lerp(START_DIST, END_DIST, ease(clamp01(p / 0.9)));
+        const curDist = byPhase * state.distScale;
+        this.world.scale.setScalar(curDist);
+
+        // ② 共轭体系中未杂化 p 始终垂直于 σ 骨架平面；
+        //    动画只改变原子间距和示意云强度，绝不把横躺的 p 强行旋转成 π 键。
+
+        // ③ 组装 uniform 数组：务必凑满 16 个槽位（原因见 _poolPos 上方的注释）
+        const n = spec.pi.length;
+        for (let i = 0; i < MAX_ATOMS; i++) {
+            if (i < n) {
+                const a = spec.pi[i];
+                _poolPos[i].set(a.pos[0] * curDist, a.pos[1] * curDist, a.pos[2] * curDist);
+                _poolDir[i].copy(UP_Z);
+                _coeffSame[i] = 1;
+                _coeffAlt[i] = (i % 2 === 0) ? 1 : -1;
+                // 着色器里只开了 6 条 MO 通道（循环开销小、够用）：
+                // · 单个轨道的密度在着色器中逐项求平方，不与别的原子干涉；
+                // · "小 π 键相加"视图每两个原子一条通道，同样取模保证不越界。
+                _bondLocal[i] = i % 6;
+                _bondRight[i] = 0;                        // 所有原子同一条通道 → 整体离域
+                _bondWrong[i] = Math.floor(i / 2) % 6;    // 两两成键 → "小 π 键相加"的错误模型
+            } else {
+                _poolPos[i].set(0, 0, 0);
+                _poolDir[i].set(0, 0, 1);
+                _coeffSame[i] = 1; _coeffAlt[i] = 1;
+                _bondLocal[i] = 0; _bondRight[i] = 0; _bondWrong[i] = 0;
+            }
+        }
+        const posArr = _poolPos.slice(), dirArr = _poolDir.slice();
+
+        // ④ 有效重叠权重（给指示条用；同时也参与着色器的干涉项）
+        //    说明：这是一个"定性指示值"，不是真的去算重叠积分；
+        //    间距越远重叠衰减越快（指数式），所以用幂函数近似。
+        const gapFactor = Math.pow(1 / Math.max(state.distScale, 0.2), 2.2);
+        const overlapWeight = state.phaseMode === 'alt' ? 0 : Math.round(clamp01(gapFactor) * 100);
+        ENGINE.overlapWeight = overlapWeight;
+
+        // ⑤ 主题与配色
+        const isLight = !!state.themeInk;
+        const blend = isLight ? THREE.NormalBlending : THREE.AdditiveBlending;
+        const cPos = state.unifiedColor ? (isLight ? ACCENT_LIGHT : ACCENT_DARK) : colorPos;
+        const cNeg = state.unifiedColor ? (isLight ? ACCENT_LIGHT : ACCENT_DARK) : colorNeg;
+
+        // ⑥ 把 uniform 推给两层云
+        const camDist = this.cam.dist;
+        const applyCloud = (pair, cfg) => {
+            if (!pair) return;
+            pair.visible = cfg.visible;
+            if (!cfg.visible) return;
+            pair.children.forEach((pts, idx) => {
+                const isHalo = idx === 1;
+                if (isHalo && !cfg.halo) { pts.visible = false; return; }
+                pts.visible = true;
+                const u = pts.material.uniforms;
+                // 数组型 uniform 必须在"改变时重新赋值"（换一个新数组），
+                // 否则 Three.js 可能不会把新数据推给显卡，出现"切了相位画面不变"的假象。
+                u.numAtoms.value = n;
+                u.atomPos.value = posArr.slice();
+                u.atomDir.value = dirArr.slice();
+                u.atomCoeff.value = cfg.coeff.slice();
+                u.atomBond.value = cfg.bond.slice();
+                u.pSharpness.value = RENDER_TUNING.defaultSharpness;
+                u.densityMultiplier.value = cfg.density;
+                const pointBoost = cfg.local ? (spec.localPointSizeBoost || 1) : 1;
+                u.pointSizeGain.value = (cfg.local ? RENDER_TUNING.localPointSizeGain : RENDER_TUNING.pointSizeGain) * pointBoost;
+                u.pointSizeMax.value = RENDER_TUNING.pointSizeMax * pointBoost;
+                u.localOnly.value = cfg.local ? 1 : 0;
+                u.moCross.value = cfg.cross;
+                u.isolatedPairView.value = cfg.isolatedPair ? 1 : 0;
+                u.colorPos.value.setHex(cPos);
+                u.colorNeg.value.setHex(cNeg);
+                // 仅按物种补偿独立轨道的透明度，离域云仍沿用统一亮度。
+                u.themeAlpha.value = state.themeAlpha * (cfg.local ? (spec.localBrightness || 1) : 1);
+                u.themeInk.value = isLight ? 1 : 0;
+                u.camDist.value = camDist;
+                pts.material.blending = blend;   // 加色混合（深色主题）/ 普通混合（浅色主题）
+            });
+        };
+
+        // 展示系数只承担教学动画作用，不代表实际时间演化或自洽场计算。
+        const vert = ease(clamp01((p - 0.30) / 0.60));
+        applyCloud(this.cloudLocal, {
+            visible: !!state.toggles.orb,
+            halo: this.quality === 'high',
+            coeff: _coeffSame,                                      // 单个 p 轨道不需要相位交替
+            bond: _bondLocal,
+            local: true,
+            density: RENDER_TUNING.defaultDensity * RENDER_TUNING.piBrightness * 0.85 *
+                (spec.localDensityBoost || 1),
+            cross: 0, isolatedPair: false
+        });
+        applyCloud(this.cloudDeloc, {
+            visible: !!state.toggles.cloud,
+            halo: this.quality === 'high',
+            coeff: state.phaseMode === 'alt' ? _coeffAlt : _coeffSame,
+            bond: state.modelMode === 'wrong' ? _bondWrong : _bondRight,
+            local: false,
+            density: RENDER_TUNING.defaultDensity * vert,
+            cross: state.modelMode === 'wrong' ? 0 : overlapWeight / 100,
+            isolatedPair: spec.id === 'benzene' && state.modelMode === 'wrong'
+        });
+
+        // ⑦ 场景其它元素的显示开关
+        if (this.overlap) this.overlap.visible = !!state.toggles.overlap;
+        if (this.nodes) this.nodes.visible = !!state.toggles.node;
+        if (this.plane) this.plane.visible = !!state.toggles.plane;
+        this.axes.visible = !!state.toggles.axes;
+        // 棍棒只是 σ 骨架示意：核间距由远到近时逐渐淡入，而不是越过阈值瞬间冒出来。
+        const bondVisibility = ease(clamp01((1.52 - curDist) / 0.40));
+        if (this.bondMaterial) this.bondMaterial.opacity = bondVisibility;
+        if (this.skeleton) {
+            this.skeleton.children.forEach(c => {
+                // 精灵是元素标签：progress ≥ 0.15（骨架靠拢）之后才出现
+                if (c.isSprite) c.visible = !!state.toggles.labels && p >= 0.15;
+                // 完全透明时不绘制；开始靠近后用材质透明度连续显现。
+                if (c.userData.isBond) c.visible = bondVisibility > 0;
+            });
+        }
+
+        // ⑧ 机位平滑过渡
+        if (this.camAnim) {
+            const A = this.camAnim;
+            A.t = Math.min(1, A.t + (dt || 0.016) / A.dur);
+            const e = ease(A.t);
+            this.cam.theta = lerp(A.from.theta, A.to.theta, e);
+            this.cam.phi = lerp(A.from.phi, A.to.phi, e);
+            this.cam.dist = lerp(A.from.dist, A.to.dist, e);
+            if (A.t >= 1) this.camAnim = null;
+        }
+
+        // ⑨ 摆相机：以结构中心取景，同时给顶部说明和右侧工具留空间。
+        const { theta, phi, dist } = this.cam;
+        if (!this._camDir) {   // 预分配，避免在动画循环里反复 new
+            this._camDir = new THREE.Vector3();
+            this._camRight = new THREE.Vector3();
+            this._camUp = new THREE.Vector3();
+        }
+        const dir = this._camDir.set(
+            Math.sin(phi) * Math.sin(theta),
+            -Math.sin(phi) * Math.cos(theta),
+            Math.cos(phi)
+        );
+        const right = this._camRight.set(0, 1, 0).cross(dir).normalize();
+        const upv = this._camUp.crossVectors(dir, right).normalize();
+        // 屏幕像素换成世界单位；缓动能避免工具开合时画面突然跳动。
+        const worldPerPx = (2 * dist * Math.tan(FOV * Math.PI / 360)) / Math.max(this.viewH, 1);
+        const wantPan = (this.panPx || 0) * worldPerPx;
+        this.panSmooth += (wantPan - this.panSmooth) * 0.18;
+        if (Math.abs(wantPan - this.panSmooth) < 0.002) this.panSmooth = wantPan;
+        const wantPanX = (this.panXPx || 0) * worldPerPx;
+        this.panXSmooth += (wantPanX - this.panXSmooth) * 0.18;
+        if (Math.abs(wantPanX - this.panXSmooth) < 0.002) this.panXSmooth = wantPanX;
+        const cx = spec.center[0] * curDist, cy = spec.center[1] * curDist;
+        const tx = cx - upv.x * this.panSmooth + right.x * this.panXSmooth;
+        const ty = cy - upv.y * this.panSmooth + right.y * this.panXSmooth;
+        const tz = -upv.z * this.panSmooth + right.z * this.panXSmooth;
+        this.camera.position.set(tx + dir.x * dist, ty + dir.y * dist, tz + dir.z * dist);
+        this.camera.lookAt(tx, ty, tz);
+
+        // ⑩ 更新屏幕空间浮标（Πₙᵐ 标注 / 键长标注）
+        this.updateFloatLabels(state, curDist);
+    },
+
+    /* ---- 屏幕空间浮标：把三维坐标投影成屏幕位置，再用 HTML 元素显示 ---- */
+    _tmpV: new THREE.Vector3(),
+    updateFloatLabels(state, curDist) {
+        const spec = this.spec;
+        const w = this.wrap.clientWidth, h = this.wrap.clientHeight;
+        const items = [];
+        const proj = (x, y, z) => {
+            // 复用预分配的向量，避免在动画循环里反复 new（每帧都 new 会造成垃圾回收抖动）
+            const v = this._tmpV.set(x, y, z).project(this.camera);
+            return { x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h };
+        };
+        // 尚未形成连续侧面重叠时只看独立 p 轨道，不提前给孤立原子贴大 π 键标注。
+        if (state.toggles.piLabel && spec.piNotation && state.progress >= 0.80) {
+            const maxY = Math.max.apply(null, spec.pi.map(p => p.pos[1]));
+            const s = proj(spec.center[0] * curDist, maxY * curDist + 1.1, 0);
+            items.push({ cls: 'fl pi', x: s.x, y: s.y - 10, html: 'Π<sub>' + spec.piNotation.n + '</sub><sup>' + spec.piNotation.m + '</sup>' });
+        }
+        // 键长标注：只标一对最有代表性的键，避免画面杂乱；
+        // 偏移放在"屏幕空间"里做（而不是世界坐标偏移），这样换任何视角都稳定地贴在键的下方。
+        if (state.toggles.bond && spec.bondNote && spec.adj.length) {
+            const pr = spec.adj[spec.annotPair || Math.floor(spec.adj.length / 2)];
+            const a = spec.pi[pr[0]].pos, b = spec.pi[pr[1]].pos;
+            const s = proj((a[0] + b[0]) / 2 * curDist, (a[1] + b[1]) / 2 * curDist, 0);
+            items.push({ cls: 'fl', x: s.x, y: s.y + 20, html: spec.bondNote });
+        }
+        // 元素复用已有的 DOM 节点，避免每次重建造成抖动
+        while (this.floatItems.length < items.length) {
+            const d = document.createElement('div');
+            d.className = 'fl';
+            this.wrap.parentNode.appendChild(d);
+            this.floatItems.push(d);
+        }
+        this.floatItems.forEach((el, i) => {
+            const it = items[i];
+            if (!it) { el.style.display = 'none'; return; }
+            el.style.display = 'block';
+            el.className = it.cls;
+            // 夹一下范围，保证标注永远留在画布内（否则分子一放大、标注就被挤出画面看不见了）
+            el.style.left = Math.max(46, Math.min(Math.max(w - 46, 46), it.x)) + 'px';
+            el.style.top = Math.max(18, Math.min(Math.max(h - 18, 18), it.y)) + 'px';
+            if (el._html !== it.html) { el.innerHTML = it.html; el._html = it.html; }
+        });
+    },
+
+    render() { if (this.renderer && this.scene && this.camera) this.renderer.render(this.scene, this.camera); },
+
+    /* ---- 量出浮层之外的可见区域，让分子尽量落在无遮挡的中央。 ---- */
+    recomputePan() {
+        if (!this.wrap || !this.wrap.parentNode) return;
+        const stage = this.wrap.parentNode;
+        const sr = this.wrap.getBoundingClientRect();
+        if (sr.height < 40) return;
+        this.viewH = sr.height;
+        // 阶段提示固定在顶部；其他说明卡根据自身位置判断占用顶部还是底部。
+        let clearTop = 12;
+        const topEl = stage.querySelector('.stage-top');
+        if (topEl) {
+            const r = topEl.getBoundingClientRect();
+            if (r.height > 4) clearTop = r.bottom - sr.top + 10;
+        }
+        let clearBottom = sr.height - 12;
+        ['.meter', '.step-bubble', '.legend'].forEach(sel => {
+            const el = stage.querySelector(sel);
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            if (r.height < 6 || r.bottom <= sr.top || r.top >= sr.bottom) return;   // 隐藏/折叠在画面外的不算
+            if (r.top - sr.top < sr.height / 2) {
+                clearTop = Math.max(clearTop, r.bottom - sr.top + 10);
+            } else {
+                clearBottom = Math.min(clearBottom, r.top - sr.top - 10);
+            }
+        });
+        this.panPx = clearBottom > clearTop + 40
+            ? Math.max(-sr.height * 0.3, Math.min(sr.height * 0.3, sr.height / 2 - (clearTop + clearBottom) / 2))
+            : 0;
+        // 桌面端右侧工具打开时，计算剩余画布的中心和可用宽度。
+        const tool = stage.querySelector('.tool:not(.collapsed)');
+        const toolRect = tool && tool.getBoundingClientRect();
+        const clearRight = sr.width > 680 && toolRect && toolRect.width > 40
+            ? Math.max(sr.width * 0.42, toolRect.left - sr.left - 12) : sr.width;
+        this.panXPx = Math.max(0, (sr.width - clearRight) / 2);
+        this.visibleWidthFraction = Math.max(0.42, clearRight / sr.width);
+    },
+
+    /* ---- 容器尺寸变化：初始可能为 0，必须兜底再校正 ---- */
+    resize() {
+        if (!this.renderer || !this.wrap) return;
+        // 画布严格跟随舞台的实际尺寸；矮屏也不能强行抬到 320px，
+        // 否则相机会按错误的高宽比取景，看到的分子就可能被裁掉。
+        const maxW = Math.max(window.innerWidth || 960, 1);
+        const maxH = Math.max((window.innerHeight || 720) - 60, 1);
+        let w = this.wrap.clientWidth, h = this.wrap.clientHeight;
+        if (!w || !h) return; // 页面刚挂载或切到自测时，等待容器真正有尺寸。
+        w = Math.max(1, Math.min(w, maxW));
+        h = Math.max(1, Math.min(h, maxH));
+        this.renderer.setSize(w, h);
+        this.camera.aspect = w / h;
+        this.camera.updateProjectionMatrix();
+        this.recomputePan();
+        // 宽高比变了（例如切到手机竖屏），如果用户没手动调过视角，就重新按新画幅取景，
+        // 否则分子会显得忽大忽小或跑出画面。
+        if (this.spec && this.viewKey && !this.camTouched) this.setView(this.spec, this.viewKey, true);
+    }
+};
+/* ---- 统一收尾：包围盒 range 必须按分子实际尺寸重算 ----
+   说明：数据里给每个物种写的 range 只是参考值；这里统一按
+   「最散开状态下的最远原子 + 裁剪半径」重算，否则电子云会被裁掉一块，
+   看起来就像"云缺了一个角"。取景半径 viewR 也一并算好，供相机机位使用。 */
+(function finalizeSpecimens() {
+    Object.keys(SPECIMENS).forEach(k => {
+        const spec = SPECIMENS[k];
+        const maxR = Math.max.apply(null, spec.pi.map(p => Math.hypot(p.pos[0], p.pos[1], p.pos[2])));
+        spec.maxR = maxR;
+        spec.range = Math.max(spec.range * 0.55, maxR * START_DIST + spec.trim + 0.5);
+        spec.viewR = maxR + spec.trim * 0.62;
+        // ★ 每个物种真正的几何中心（取参与原子在 xy 平面上的包围盒中心）。
+        //   为什么要算它：像 O₃、SO₂ 这种 V 形分子，原子分布在 y 的正半边，
+        //   几何中心并不在原点；相机如果一律盯着原点，分子就会偏到画面一侧。
+        const xs = spec.pi.map(p => p.pos[0]), ys = spec.pi.map(p => p.pos[1]);
+        spec.center = [(Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2,
+        (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2, 0];
+    });
+})();
+/* @@PART_ENGINE_END@@ */
+/* =====================================================================
+   L. Vue 界面层（全局构建版 + 组合式 API，负责全部界面状态）
+   ===================================================================== */
+const { createApp, ref, reactive, computed, watch, onMounted, nextTick } = Vue;
+
+const QUIZ_TYPE_NAME = { choice: '选择题', judge: '判断题', diagram: '图示识别', match: '配对题', data: '数据推理' };
+
+createApp({
+    setup() {
+        /* ---------- 基本状态 ---------- */
+        const currentId = ref('intro');          // 当前模块
+        const specimenOverride = ref(null);      // 当前模块里手动切换的物种
+        const progress = ref(0);                 // 成键进度 0 → 1（动画主轴）
+        const distScale = ref(1);                // 原子间距倍率（与进度彼此独立）
+        const playing = ref(false);
+        const speed = ref(1);
+        const speeds = [0.5, 1, 2, 4];
+        const mode = ref('auto');                // auto 自动播放 / step 分步讲解
+        const stepIndex = ref(0);
+        const viewKey = ref('main');
+        const phaseMode = ref('same');           // same 同相位 / alt 交替相位
+        const modelMode = ref('right');          // right 正确模型 / wrong 小 π 键相加
+        const unifiedColor = ref(false);         // 统一配色（把红蓝变成同色）
+        const isLight = ref(false);
+        const quality = ref('high');
+        const panelOpen = ref(false);            // 默认只显示主操作，详细设置可从控制区展开
+        const toolOpen = ref(window.innerWidth > 1080); // 窄屏先露出模型，判据从右侧把手打开
+        const advOpen = ref(false);
+        const helpOpen = ref(false);
+        const overlapWeight = ref(100);
+        const wrap = ref(null);
+
+        // 显示/隐藏开关：orbit 是"单个 p 轨道"，cloud 是"整体离域云"，
+        // 两个开关的不同组合正好就是苯模块要求的"三态切换"。
+        const toggles = reactive({
+            orb: true, cloud: false, overlap: false, labels: true,
+            node: false, plane: false, axes: false, piLabel: true, bond: false
+        });
+        const toggleList = [
+            { k: 'orb', label: '原子轨道' },
+            { k: 'cloud', label: '离域电子云' },
+            { k: 'overlap', label: '重叠区域' },
+            { k: 'labels', label: '原子标签' },
+            { k: 'node', label: '节面' },
+            { k: 'plane', label: '分子平面' },
+            { k: 'axes', label: '坐标轴' },
+            { k: 'piLabel', label: 'Πₙᵐ 标注' },
+            { k: 'bond', label: '键长标注' }
+        ];
+        // 离域层在进度 0.30 后才开始增强，尚未显现时不展示对应图例。
+        const cloudVisible = computed(() => toggles.cloud && progress.value > 0.35);
+
+        /* ---------- 当前模块 / 当前物种 ---------- */
+        const curSpec = computed(() => {
+            const m = MODULE_MAP[currentId.value];
+            const id = specimenOverride.value || (m && m.specimen) || 'benzene';
+            return SPECIMENS[id] || SPECIMENS.benzene;
+        });
+        const specimenId = computed(() => curSpec.value.id);
+        const cur = computed(() => {
+            const m = MODULE_MAP[currentId.value] || MODULES[0];
+            return Object.assign({}, m, { viewPresets: curSpec.value.viewPresets });
+        });
+
+        const progressPct = computed(() => Math.round(progress.value * 100));
+        const distPct = computed(() => Math.round(distScale.value * 100));
+        const curPhaseName = computed(() => {
+            const p = progress.value;
+            if (p >= 0.999) {
+                if (currentId.value === 'phase') return '相位对照';
+                if (currentId.value === 'myths') return '模型对照';
+                return toggles.cloud ? '⑤ 离域成型' : '⑤ 骨架就位 · p 轨道';
+            }
+            const ph = PHASES.find(x => p >= x.range[0] && p < x.range[1]) || PHASES[0];
+            if (ph.key === 'delocal' && !toggles.cloud) return '⑤ 骨架就位 · p 轨道';
+            return ph.name;
+        });
+        const dataRead = computed(() => DATA_READ[currentId.value] || DATA_READ.intro);
+        const overlapNote = computed(() => {
+            if (phaseMode.value === 'alt') {
+                return '交替系数给这个示意轨道引入节点；其他占据 π 轨道仍可贡献电子密度。';
+            }
+            if (overlapWeight.value > 60) {
+                return '同相系数对应无键间节点的组合；数值仅用于定性演示。';
+            }
+            return '同相位，但原子被拉得太远、重叠明显减弱：动手体会"重叠程度"是怎么掉下去的。';
+        });
+
+        /* ---------- 三态切换（单个 p 轨道 / 重叠过程 / 离域电子云） ---------- */
+        const view3 = computed(() => {
+            if (toggles.cloud && !toggles.orb) return 'deloc';
+            if (toggles.cloud && toggles.orb) return 'overlap';
+            return toggles.orb ? 'single' : null;
+        });
+        function setView3(k) {
+            toggles.orb = (k !== 'deloc');
+            toggles.cloud = (k !== 'single');
+            // 顺手把"重叠区域"高亮管也一起切，让三态在画面上差异更清楚：
+            // 只有中间的"重叠过程"才需要把核间重叠区标出来。
+            toggles.overlap = (k === 'overlap');
+        }
+
+        /* ---------- 判据小工具 ---------- */
+        const judge = reactive({
+            coplanar: true, perp: true,
+            atoms: [{ el: 'C', e: 1 }, { el: 'C', e: 1 }, { el: 'C', e: 1 },
+            { el: 'C', e: 1 }, { el: 'C', e: 1 }, { el: 'C', e: 1 }]
+        });
+        const judgeOk = computed(() => judge.coplanar && judge.perp && judge.atoms.length >= 3);
+        const judgeText = computed(() => {
+            if (!judge.coplanar) return '✗ 不共平面';
+            if (!judge.perp) return '✗ 没有平行 p 轨道';
+            return 'Π<sub>' + judge.atoms.length + '</sub><sup>' + judgeM.value + '</sup>';
+        });
+        // 负电荷若进入 π 系统，已包含在相应原子的 p 电子贡献里，不重复加到总数。
+        const judgeM = computed(() => judge.atoms.reduce((s, a) => s + a.e, 0));
+        const judgeWhy = computed(() => {
+            if (!judge.coplanar) {
+                return '此处要求参与原子近似共平面，才能有效构成图示的连续侧面重叠；不共平面不等于 p 轨道绝对不可能平行。';
+            }
+            if (!judge.perp) {
+                return '第二条判据卡住了：没有垂直于该平面的 p 轨道，就谈不上"肩并肩"的侧面重叠。';
+            }
+            const n = judge.atoms.length;
+            const sum = judge.atoms.reduce((s, a) => s + a.e, 0);
+            if (n < 3) {
+                return '只有 2 个原子参与 —— 这属于普通 π 键，不是大 π 键。三条判据都满足，但"参与原子数"这一条决定了它不能叫大 π 键。';
+            }
+            return 'n = 参与原子数 = ' + n + '（每个原子提供一个相互平行的 p 轨道）；' +
+                'm = 各原子 p 电子贡献之和 = ' + sum + '（负电荷若参与已计入对应原子，不再额外相加）。' +
+                '所以写作 Π' + n + ' 上标 ' + judgeM.value + '。';
+        });
+        function applyPreset(p) {
+            judge.coplanar = p.coplanar;
+            judge.perp = p.perp;
+            judge.atoms = p.atoms.map((el, i) => ({ el: el, e: p.es[i] }));
+        }
+
+        // 误区卡：必须做成响应式的，否则"点开看辨析"点了没反应
+        const myths = ref(MYTHS.map(m => Object.assign({}, m)));
+
+        /* ---------- 互动自测 ---------- */
+        // 把题库复制成"带作答状态"的副本，避免污染原始题库
+        const quizState = ref(QUIZ_BANK.map(q => Object.assign({}, q, {
+            done: false, correct: false, picked: null,
+            selLeft: null, selRight: null,
+            paired: q.type === 'match' ? {} : null,
+            mistakes: 0
+        })));
+        const quizType = ref('all');
+        const quizFiltered = computed(() => quizType.value === 'all'
+            ? quizState.value
+            : quizState.value.filter(s => s.type === quizType.value));
+        const quizAnsweredTotal = computed(() => quizState.value.filter(s => s.done).length);
+        const quizScore = computed(() => quizState.value.filter(s => s.done && s.correct).length);
+        const quizDoneCount = computed(() => quizFiltered.value.filter(s => s.done).length);
+        const typeName = (t) => QUIZ_TYPE_NAME[t] || '选择题';
+
+        function optClass(q, oi) {
+            if (!q.done) return '';
+            if (oi === q.answer) return 'right';
+            if (oi === q.picked) return 'wrong';
+            return '';
+        }
+        function answer(q, oi) {
+            if (q.done) return;
+            q.picked = oi;
+            q.correct = (oi === q.answer);
+            q.done = true;
+        }
+        function pickLeft(q, k) {
+            if (q.paired && q.paired[k]) return;
+            q.selLeft = k;
+        }
+        function pickRight(q, k) {
+            if (!q.selLeft) return;
+            const expect = q.answer[q.selLeft];
+            if (expect === k) {
+                q.paired[q.selLeft] = k;
+                q.selLeft = null;
+                // 四对全部配对完成 → 判定本题
+                if (Object.keys(q.paired).length === q.left.length) {
+                    q.done = true;
+                    q.correct = q.mistakes === 0;
+                }
+            } else {
+                q.mistakes += 1;
+                q.selLeft = null;
+            }
+        }
+        function resetQuiz() {
+            quizState.value.forEach(q => {
+                q.done = false; q.correct = false; q.picked = null;
+                q.selLeft = null; q.selRight = null; q.mistakes = 0;
+                q.paired = q.type === 'match' ? {} : null;
+            });
+        }
+
+        /* ---------- 模块切换与默认开关 ---------- */
+        function moduleStartProgress(id) {
+            // 对比课直接展示已有重叠的状态；其他模块仍从孤立 p 轨道开始演示。
+            return id === 'phase' || id === 'myths' ? 1 : 0;
+        }
+        function applyModuleDefaults(id) {
+            phaseMode.value = 'same';
+            modelMode.value = (id === 'myths') ? 'wrong' : 'right';
+            // 对比课必须让受切换影响的离域云可见，其他课保持独立 p 轨道起始状态。
+            const compareCloud = id === 'phase' || id === 'myths';
+            toggles.orb = !compareCloud;
+            toggles.cloud = compareCloud; toggles.overlap = false;
+            toggles.labels = true; toggles.piLabel = true;
+            toggles.node = false; toggles.plane = false; toggles.axes = false; toggles.bond = false;
+            if (id === 'butadiene') { toggles.bond = true; }
+        }
+        function go(id) {
+            if (!MODULE_MAP[id]) id = 'intro';
+            currentId.value = id;
+            if (id === 'intro' && window.innerWidth <= 1080) toolOpen.value = false;
+            panelOpen.value = false; // 换课时先恢复紧凑主操作，避免上个模块的详细设置挤占画布
+            specimenOverride.value = null;
+            progress.value = moduleStartProgress(id);
+            playing.value = false;
+            mode.value = 'auto';
+            stepIndex.value = 0;
+            distScale.value = 1;
+            viewKey.value = 'main';
+            applyModuleDefaults(id);
+            // 用 location.hash 而不是 history.replaceState：
+            // 双击打开（file://）时 origin 为 null，replaceState 会抛 SecurityError。
+            if (location.hash !== '#' + id) location.hash = id;
+            nextTick(() => ENGINE.resize());
+        }
+        function setSpecimen(id) {
+            specimenOverride.value = id;
+            nextTick(() => ENGINE.resize());
+        }
+        function quickSpecimen(id) {
+            currentId.value = 'advanced';
+            panelOpen.value = false;
+            specimenOverride.value = id;
+            progress.value = moduleStartProgress('advanced');
+            playing.value = false;
+            applyModuleDefaults('advanced');
+            if (location.hash !== '#advanced') location.hash = 'advanced';
+        }
+        function setView(k) {
+            viewKey.value = k;
+            ENGINE.setView(curSpec.value, k, false);
+        }
+
+        /* ---------- 播放控制 ---------- */
+        function togglePlay() {
+            if (mode.value !== 'auto') mode.value = 'auto';
+            if (!playing.value && progress.value >= 0.999) progress.value = 0;
+            playing.value = !playing.value;
+        }
+        function resetAll() {
+            progress.value = moduleStartProgress(currentId.value);
+            distScale.value = 1;
+            playing.value = false;
+            mode.value = 'auto';
+            stepIndex.value = 0;
+            viewKey.value = 'main';
+            ENGINE.setView(curSpec.value, 'main', true);
+        }
+        function setMode(m) {
+            mode.value = m;
+            if (m === 'step') {
+                playing.value = false;
+                stepIndex.value = Math.min(stepIndex.value, cur.value.steps.length - 1);
+                applyStep();
+            } else {
+                // 「自动播放」按钮的语义就是"直接放给学生看"，所以点了就开始播
+                if (progress.value >= 0.999) progress.value = 0;
+                playing.value = true;
+            }
+        }
+        function applyStep() {
+            const n = cur.value.steps.length;
+            progress.value = Math.min(0.995, (stepIndex.value + 0.5) / n);
+        }
+        function stepNext() {
+            const n = cur.value.steps.length;
+            if (stepIndex.value < n - 1) { stepIndex.value++; applyStep(); }
+        }
+        function stepPrev() {
+            if (stepIndex.value > 0) { stepIndex.value--; applyStep(); }
+        }
+
+        /* ---------- 主题与画质 ---------- */
+        function toggleTheme() {
+            isLight.value = !isLight.value;
+            document.body.classList.toggle('light-theme', isLight.value);
+        }
+        function toggleQuality() {
+            quality.value = quality.value === 'high' ? 'low' : 'high';
+            ENGINE.setSpecimen(curSpec.value, quality.value);
+            ENGINE.setView(curSpec.value, viewKey.value, true);
+        }
+
+        /* ---------- 监听：物种 / 画质 / 视角 / 相位 变化时同步到三维场景 ---------- */
+        watch(curSpec, (spec) => {
+            ENGINE.setSpecimen(spec, quality.value);
+            ENGINE.setView(spec, viewKey.value, true);
+        });
+        watch(viewKey, (k) => ENGINE.setView(curSpec.value, k, false));
+        // 说明卡或判据工具改变可用面积时，重新计算中心与取景距离。
+        function remeasure() {
+            const run = () => {
+                ENGINE.recomputePan();
+                if (!ENGINE.camTouched && !ENGINE.camAnim && ENGINE.spec) {
+                    const d = ENGINE.fitDistance(ENGINE.spec, ENGINE.viewKey);
+                    if (isFinite(d) && d > 0.1) {
+                        ENGINE.cam.dist = d;
+                        ENGINE.minDist = d * 0.35;
+                        ENGINE.maxDist = d * 3.2;
+                    }
+                }
+            };
+            setTimeout(run, 60);
+            setTimeout(run, 380);
+        }
+        watch([panelOpen, mode, currentId, unifiedColor, toolOpen, cloudVisible, () => toggles.orb], remeasure);
+        watch(phaseMode, (v) => {
+            // 对比模块的键间节面只属于交替相位，切回同相时也要一起关闭。
+            if (currentId.value === 'phase') toggles.node = (v === 'alt');
+        });
+
+        /* ---------- 渲染主循环 ---------- */
+        let rafId = 0, lastT = 0;
+        function tick(t) {
+            // 先把下一帧排上，再干活：万一某一帧里出了异常，
+            // 也只是这一帧画不出来，不会让整个渲染循环静默死掉。
+            rafId = requestAnimationFrame(tick);
+            const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
+            lastT = t;
+            if (playing.value && mode.value === 'auto') {
+                progress.value = Math.min(1, progress.value + STEP_PER_FRAME * speed.value);
+                if (progress.value >= 1) playing.value = false;
+            }
+            if (currentId.value !== 'quiz') {
+                ENGINE.update({
+                    progress: progress.value,
+                    distScale: distScale.value,
+                    phaseMode: phaseMode.value,
+                    modelMode: modelMode.value,
+                    toggles: toggles,
+                    unifiedColor: unifiedColor.value,
+                    themeInk: isLight.value ? 1 : 0,
+                    themeAlpha: isLight.value ? RENDER_TUNING.lightThemeAlpha : 1
+                }, dt);
+                ENGINE.render();
+                const ow = ENGINE.overlapWeight;
+                if (ow !== overlapWeight.value) overlapWeight.value = ow;
+            }
+        }
+
+        /* ---------- 快捷键：空格播放/暂停、R 重置、←/→ 微调进度 ---------- */
+        function onKey(e) {
+            // 焦点在按钮/滑块上时，空格和方向键属于控件自身；自测页也不控制隐藏的舞台。
+            if (currentId.value === 'quiz' || e.altKey || e.ctrlKey || e.metaKey) return;
+            if (e.target instanceof Element &&
+                e.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+            if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+            else if (e.key === 'r' || e.key === 'R') { resetAll(); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); progress.value = Math.min(1, progress.value + 0.02); }
+            else if (e.key === 'ArrowLeft') { e.preventDefault(); progress.value = Math.max(0, progress.value - 0.02); }
+        }
+
+        onMounted(() => {
+            // 支持 #模块id 直接打开，刷新不跳回首页
+            const h = (location.hash || '').replace('#', '');
+            if (MODULE_MAP[h]) { currentId.value = h; }
+            progress.value = moduleStartProgress(currentId.value);
+            applyModuleDefaults(currentId.value);
+
+            ENGINE.init(wrap.value);
+            ENGINE.setSpecimen(curSpec.value, quality.value);
+            ENGINE.resize();
+            nextTick(() => {
+                ENGINE.resize();
+                ENGINE.setView(curSpec.value, 'main', true);
+            });
+            // 字体、外部样式表可能稍后才生效，布局稳定前后各再量一次，
+            // 保证"露出区域"是准的（分子不会藏在控制面板后面）
+            [150, 700, 1600].forEach(ms => setTimeout(() => ENGINE.resize(), ms));
+
+            // 容器尺寸自适应（初始可能宽高为 0，resize 内部已做兜底）
+            if (window.ResizeObserver) {
+                const ro = new ResizeObserver(() => ENGINE.resize());
+                ro.observe(wrap.value);
+            }
+            let wasNarrow = window.innerWidth <= 1080;
+            window.addEventListener('resize', () => {
+                const narrow = window.innerWidth <= 1080;
+                if (narrow && !wasNarrow) toolOpen.value = false;
+                wasNarrow = narrow;
+                ENGINE.resize();
+            });
+            window.addEventListener('keydown', onKey);
+            rafId = requestAnimationFrame(tick);
+        });
+
+        return {
+            // 导航与信息卡
+            modules: MODULES, currentId, cur, go, dataTable: DATA_TABLE, dataRead, DATA_SOURCE,
+            CURATED_SPECIES, advOpen, helpOpen,
+            // 顶栏
+            unifiedColor, isLight, toggleTheme, quality, toggleQuality, panelOpen, toolOpen,
+            // 舞台
+            wrap, curPhaseName, cloudVisible, progressPct, distPct, overlapWeight, overlapNote,
+            mode, setMode, stepPrev, stepNext, stepIndex,
+            speeds, speed, progress, distScale,
+            // 控制面板
+            toggles, toggleList, viewKey, setView, specimenId, setSpecimen, quickSpecimen,
+            phaseMode, modelMode, view3, setView3, playing, togglePlay, resetAll,
+            // 判据小工具
+            judge, JUDGE_PRESETS, applyPreset, judgeText, judgeWhy, judgeOk,
+            // 误区
+            MYTHS: myths, SVG_WRONG, SVG_RIGHT,
+            // 自测
+            QUIZ_TYPES, quizType, quizFiltered, quizScore, quizDoneCount, quizAnsweredTotal,
+            typeName, optClass, answer, pickLeft, pickRight, resetQuiz
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>
